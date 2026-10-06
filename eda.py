@@ -67,11 +67,13 @@ def plot_class_distribution(split, train_raw, test_raw):
     counts.to_csv(config.FIG_DIR / "class_distribution.csv")
 
     # split마다 개수 규모가 크게 달라서(4,500 / 500 / 1,000) 그래프를 따로 그림
-    fig, axes = plt.subplots(1, len(counts.columns), figsize=(15, 4))
+    # layout="constrained": 제목·축 라벨이 겹치지 않게 자동 배치
+    fig, axes = plt.subplots(1, len(counts.columns), figsize=(15, 4.5), layout="constrained")
     for ax, name in zip(axes, counts.columns):
         ax.bar(counts.index, counts[name], color=config.BAR_COLOR, width=0.6)
         ax.set_title(f"{name} (total {counts[name].sum():,})")
-        ax.tick_params(axis="x", rotation=45)
+        # 라벨 끝을 눈금에 맞춰 오른쪽 정렬해야 긴 이름끼리 겹치지 않음
+        plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
         ax.grid(axis="y", alpha=0.3)
         ax.set_axisbelow(True)  # 격자선을 막대 뒤로
         ax.spines[["top", "right"]].set_visible(False)
@@ -90,7 +92,8 @@ def plot_sample_grid(split, train_raw):
     train_idx = np.asarray(split["train_indices"])
     n_cols = config.EDA_SAMPLES_PER_CLASS
 
-    fig, axes = plt.subplots(config.NUM_CLASSES, n_cols, figsize=(n_cols * 1.2, config.NUM_CLASSES * 1.2))
+    fig, axes = plt.subplots(config.NUM_CLASSES, n_cols, figsize=(n_cols * 1.2, config.NUM_CLASSES * 1.2),
+                             layout="constrained")
     for c, class_name in enumerate(train_raw.classes):
         class_idx = train_idx[labels[train_idx] == c]           # train 중 클래스 c만
         chosen = rng.choice(class_idx, size=n_cols, replace=False)
@@ -189,7 +192,8 @@ def plot_augmentation_comparison(split, train_raw):
     chosen = rng.choice(split["train_indices"], size=config.EDA_AUG_IMAGES, replace=False)
     n_cols = 1 + config.EDA_AUG_VIEWS  # 원본 1장 + 증강 여러 장
 
-    fig, axes = plt.subplots(len(chosen), n_cols, figsize=(n_cols * 1.4, len(chosen) * 1.5))
+    fig, axes = plt.subplots(len(chosen), n_cols, figsize=(n_cols * 1.4, len(chosen) * 1.5),
+                             layout="constrained")
     for row, idx in enumerate(chosen):
         original = Image.fromarray(train_raw.data[idx])
         axes[row, 0].imshow(original)
