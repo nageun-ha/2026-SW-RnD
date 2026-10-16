@@ -288,7 +288,7 @@ def get_train_val_datasets(augment=None):
     return train_set, val_set
 
 
-def get_dataloaders(augment=None):
+def get_dataloaders(augment=None, batch_size=None, seed=None):
     """
     학습에 바로 쓸 수 있는 train / validation DataLoader를 만든다.
 
@@ -297,17 +297,20 @@ def get_dataloaders(augment=None):
 
     Args:
         augment: None이면 config.USE_AUGMENTATION, True/False로 직접 지정 가능
+        batch_size: None이면 config.BATCH_SIZE (train 로더에만 적용)
+        seed: 셔플 순서용 시드. None이면 config.SEED
+              ※ train/val 분할은 이 값과 무관하게 항상 splits/ 파일을 따른다.
     Returns:
         (train_loader, val_loader)
     """
     train_set, val_set = get_train_val_datasets(augment)
 
     generator = torch.Generator()
-    generator.manual_seed(config.SEED)
+    generator.manual_seed(config.SEED if seed is None else seed)
 
     train_loader = DataLoader(
         train_set,
-        batch_size=config.BATCH_SIZE,
+        batch_size=config.BATCH_SIZE if batch_size is None else batch_size,
         shuffle=True,
         num_workers=config.NUM_WORKERS,
         pin_memory=config.PIN_MEMORY,

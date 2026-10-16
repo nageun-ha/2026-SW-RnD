@@ -9,3 +9,6 @@ __pycache__/
 
 # 개인 에디터 설정
 .vscode/
+
+# 체크포인트는 용량이 커서 제외 (CSV/JSON/PNG 결과는 공유)
+results/**/*.pt

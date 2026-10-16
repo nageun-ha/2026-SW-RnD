@@ -56,9 +56,56 @@ EVAL_BATCH_SIZE = 256  # 평가 시에는 역전파가 없어 더 크게 잡아�
 # Windows/CPU 환경에서는 0이 가장 안전함 (멀티프로세스 관련 오류·재현성 문제 방지)
 NUM_WORKERS = 0
 
-# GPU가 있으면 사용, 없으면 CPU (GPU 없는 팀원도 그대로 실행 가능)
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-PIN_MEMORY = torch.cuda.is_available()  # GPU 전송 속도 향상 옵션, CPU면 끔
+
+def get_device():
+    """
+    사용할 장치를 cuda → mps → cpu 순서로 자동 선택한다.
+
+    - cuda: NVIDIA GPU (윈도우 노트북)
+    - mps : Apple Silicon GPU (맥미니)
+    - cpu : 둘 다 없을 때
+
+    cuda는 '있다'만 확인하지 않고 작은 연산을 실제로 돌려본다.
+    설치된 PyTorch가 GPU 세대를 지원하지 않으면(예: RTX 50 시리즈 + CUDA 12.6 빌드)
+    is_available()은 True인데 연산에서 에러가 나기 때문이다. 이때는 경고 후 다음 장치로 넘어간다.
+    """
+    if torch.cuda.is_available():
+        try:
+            (torch.ones(1, device="cuda") * 2).item()  # 실제 GPU 연산 테스트
+            return torch.device("cuda")
+        except RuntimeError as error:
+            print(f"[경고] CUDA GPU를 찾았지만 연산에 실패해 사용하지 않습니다: {error}".splitlines()[0])
+            print("       GPU에 맞는 PyTorch 버전을 설치하세요: https://pytorch.org/get-started/locally/")
+    if torch.backends.mps.is_available():
+        return torch.device("mps")
+    return torch.device("cpu")
+
+
+DEVICE = get_device()
+# pin_memory는 CPU→CUDA 전송을 빠르게 하는 옵션이라 cuda일 때만 켠다 (mps/cpu에선 효과 없음)
+PIN_MEMORY = DEVICE.type == "cuda"
+
+# ---------------------------------------------------------------------
+# 학습 기본 하이퍼파라미터 (train.py 커맨드라인 인자의 기본값)
+# ---------------------------------------------------------------------
+RESULTS_DIR = PROJECT_DIR / "results"  # 실험 결과 폴더 (실험마다 하위 폴더 생성)
+MODEL_NAME = "baseline"
+EPOCHS = 20
+OPTIMIZER = "sgd"        # "sgd" 또는 "adam"
+LR = 0.01
+MOMENTUM = 0.9           # SGD에서만 사용
+WEIGHT_DECAY = 5e-4      # L2 정규화 강도
+
+# ---------------------------------------------------------------------
+# 파이프라인 검증 (sanity_check.py)
+# ---------------------------------------------------------------------
+INIT_LOSS_BATCHES = 5          # 초기 loss를 평균낼 val 배치 수
+INIT_LOSS_TOLERANCE = 0.3      # 초기 loss가 ln(10)≈2.30 에서 이 이상 벗어나면 실패
+OVERFIT_NUM_SAMPLES = 64       # 과적합 테스트에 쓸 train 샘플 수
+OVERFIT_STEPS = 300            # 같은 배치로 반복 학습할 횟수
+OVERFIT_LR = 1e-3              # 과적합 테스트용 Adam 학습률
+OVERFIT_TARGET_ACC = 0.99      # 이 정확도 이상이면 통과
+OVERFIT_LOG_EVERY = 50         # 몇 step마다 진행 상황을 출력할지
 
 # ---------------------------------------------------------------------
 # 검증 체크 / EDA

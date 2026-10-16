@@ -1,19 +1,96 @@
-# CIFAR-10 CNN 구조별 성능 비교 — 1주차: 데이터 파이프라인
+# CIFAR-10 CNN 구조별 성능 비교
 
-모델만 바꿔가며 공정하게 비교할 수 있도록 **데이터 분할·전처리를 고정**한 코드입니다.
+- 1주차: 데이터 분할·전처리 고정 (모델만 바꿔가며 공정하게 비교하기 위함)
+- 2주차: Baseline CNN + 학습/검증/평가 파이프라인 + 파이프라인 검증
 
 ## 폴더 구조
 
 ```
 cifar10_cnn/
-├── config.py          # 모든 설정값 (시드, 분할 크기, 배치 크기, 증강 on/off, 경로)
-├── data.py            # 로딩 · 분할 · transform · DataLoader + 검증 체크
+├── config.py          # 모든 설정값 (시드, 분할, 장치 선택, 학습 기본 하이퍼파라미터)
+├── data.py            # 로딩 · 분할 · transform · DataLoader + 데이터 검증 체크
 ├── eda.py             # 탐색적 데이터 분석 및 시각화
+├── models/            # 모델 레지스트리 (파일 하나 추가 = 모델 하나 추가)
+│   ├── __init__.py
+│   └── baseline.py    # BaselineCNN (Conv-ReLU-Pool × 3 + FC × 2)
+├── engine.py          # train_one_epoch / evaluate / confusion_matrix
+├── train.py           # 학습 실행 (커맨드라인 인자로 하이퍼파라미터 변경)
+├── evaluate.py        # 클래스별 정확도 + confusion matrix
+├── sanity_check.py    # 파이프라인 검증 4종
 ├── requirements.txt
 ├── splits/            # 분할 인덱스 + 정규화 통계 (★ 팀원과 공유)
 ├── figures/           # EDA 결과 그림/표
+├── results/           # 실험별 결과 폴더 (체크포인트 .pt는 git 제외)
 └── data/              # CIFAR-10 원본 (자동 다운로드, 공유 불필요)
 ```
+
+---
+
+# 2주차: Baseline CNN과 학습 파이프라인
+
+## 실행 순서와 정상 출력
+
+```bash
+python sanity_check.py
+```
+정상이면 4개 모두 `[통과]`이고 마지막 줄이 `요약: shape 통과, init_loss 통과, overfit 통과, overlap 통과`.
+
+| 검증 | 정상 출력 예시 |
+|---|---|
+| shape | 입력 `(256, 3, 32, 32)` → 출력 `(256, 10)`, 전체 파라미터 `620,362` |
+| init_loss | `초기 loss: 2.30xx` (이론값 ln 10 = 2.3026, ±0.3 이내) |
+| overfit | step 50 안팎에서 `acc 1.0000`, loss가 0에 가까워짐 |
+| overlap | `train 45,000 / val 5,000 / 겹치는 인덱스 0개` |
+
+```bash
+python train.py                    # config 기본값: SGD, lr 0.01, batch 128, 20 epoch, 증강 ON
+```
+- epoch마다 `train loss/acc | val loss/acc | 소요시간` 한 줄 출력, val acc가 갱신되면 `*best` 표시
+- 1 epoch 후 val acc 약 0.44, 2 epoch 후 약 0.53. loss는 2.30에서 시작해 점점 감소
+- 20 epoch 후 best val acc **약 0.80** (RTX 5060 실측, epoch당 약 17초 / CPU는 약 21초)
+- 결과: `results/baseline_sgd_lr0.01_bs128_ep20_aug_seed42/` 에 `args.json`, `history.csv`, `best.pt`
+
+```bash
+python evaluate.py --run baseline_sgd_lr0.01_bs128_ep20_aug_seed42
+```
+- 클래스별 정확도(낮은 순)와 confusion matrix 출력, CSV·PNG 저장
+- CIFAR-10에서는 보통 cat·bird·dog가 낮고 automobile·truck·ship이 높게 나옴
+
+## 자주 쓰는 옵션
+
+```bash
+python train.py --epochs 5 --lr 0.001 --optimizer adam
+python train.py --no-augment                 # 증강 없는 baseline
+python train.py --seed 1                     # 다른 시드 (train/val 분할은 그대로)
+python train.py --run-name my_exp --overwrite
+python sanity_check.py --check overfit       # 검증 하나만
+```
+
+## 새 모델 추가 (3~4주차)
+
+1. `models/새모델.py` 파일을 만들고 클래스 위에 `@register_model("새모델")`을 붙인다.
+2. `python sanity_check.py --model 새모델` 로 검증한다.
+3. `python train.py --model 새모델` 로 학습한다.
+
+다른 파일은 고칠 필요가 없다.
+
+## 2주차 설계 결정
+
+| 항목 | 결정 | 이유 |
+|---|---|---|
+| 장치 | cuda → mps → cpu 자동 선택, cuda는 실제 연산 테스트까지 | GPU가 있어도 PyTorch 빌드가 안 맞으면 자동으로 다음 장치 사용 |
+| 학습 루프 | `engine.py` 하나를 train·evaluate·sanity_check가 공유 | 검증한 코드 = 학습에 쓰는 코드 |
+| best 기준 | val 정확도 | 테스트셋은 6주차 `evaluate.py --test` 전까지 사용 금지 |
+| 시드 | `--seed`는 초기화·셔플·증강에만 영향, 분할은 `splits/` 고정 | 시드를 바꿔 반복 실험해도 같은 val로 비교 가능 |
+| 기록 | 매 epoch `history.csv` 덮어쓰기, `args.json`에 장치·버전 기록 | 중단돼도 기록 보존, 팀원 간 결과 차이 추적 |
+| Baseline | BN·Dropout 없음 | 이후 구조 개선 효과를 비교할 기준점 |
+
+> 재현성: 같은 장치에서는 같은 시드로 결과가 완전히 동일하다 (CPU에서 확인).
+> cuda / mps / cpu 사이에서는 연산 방식 차이로 소수점 아래 결과가 조금 다를 수 있다.
+
+---
+
+# 1주차: 데이터 파이프라인
 
 ## 실행 방법
 
