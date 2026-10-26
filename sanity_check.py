@@ -36,6 +36,8 @@ def check_shape(model, val_loader, device):
     출력이 (배치크기, 10)이 아니면 모델 구조(특히 Flatten 뒤 Linear 입력 크기)가 잘못된 것.
     """
     images, _ = next(iter(val_loader))
+    # eval 모드로 실행: train 모드면 BN의 running 통계가 갱신되어 다음 체크(init_loss)에 영향을 줌
+    model.eval()
     with torch.no_grad():
         outputs = model(images.to(device))
     print(f"  입력 shape:  {tuple(images.shape)}")
@@ -87,6 +89,16 @@ def check_overfit(model_name, device):
 
     - 증강은 끈다: 매번 이미지가 달라지면 외우기 어려워져 '코드 문제'와 구분이 안 됨
     - 같은 배치를 계속 반복 학습한다 (DataLoader를 다시 돌리지 않음)
+    - 정확도는 매 step 업데이트 후 eval 모드로 다시 계산한다 (아래 '왜 eval 모드인가' 참고)
+
+    왜 eval 모드인가 (학습/평가 모드에 따라 동작이 다른 모델 때문)
+    - Dropout: train 모드에선 매번 뉴런 절반이 무작위로 꺼져 정확도가 들쭉날쭉하다.
+      실측: dropout 모델은 32 step에 다 외웠는데 train 모드 정확도는 그 뒤에도 31번 99% 아래로 떨어짐
+      → 마지막 step만 보면 멀쩡한 모델이 운 나쁘게 '실패'할 수 있다.
+    - BatchNorm: train 모드는 '현재 배치 통계', eval 모드는 '누적 running 통계'를 쓴다.
+      실측: bn 모델은 train 모드로는 14 step, eval 모드로는 26 step에 도달
+      → train 모드만 보면 실제 평가 상태는 검사하지 못한다.
+    eval 모드 정확도는 실제 val/test 평가와 같은 조건이므로 이걸로 판정한다.
     """
     set_seed()
     model = get_model(model_name).to(device)  # 다른 체크와 섞이지 않게 새 모델로 시작
@@ -101,19 +113,26 @@ def check_overfit(model_name, device):
     # Adam은 학습률에 덜 민감해서 '코드가 맞는지'만 빠르게 볼 때 편하다
     optimizer = torch.optim.Adam(model.parameters(), lr=config.OVERFIT_LR)
 
-    model.train()
+    reached_step = None  # eval 모드 정확도가 처음 목표에 도달한 step
     for step in range(1, config.OVERFIT_STEPS + 1):
+        model.train()  # 학습은 train 모드 (Dropout 켜짐, BN은 배치 통계 사용·running 통계 갱신)
         optimizer.zero_grad()
-        outputs = model(images)
-        loss = criterion(outputs, labels)
+        loss = criterion(model(images), labels)
         loss.backward()
         optimizer.step()
 
-        acc = (outputs.argmax(dim=1) == labels).float().mean().item()
-        if step == 1 or step % config.OVERFIT_LOG_EVERY == 0:
-            print(f"  step {step:4d} | loss {loss.item():.4f} | acc {acc:.4f}")
+        # 판정은 eval 모드 (Dropout 꺼짐, BN은 running 통계 사용) — 업데이트 '후' 가중치로 계산
+        model.eval()
+        with torch.no_grad():
+            acc = (model(images).argmax(dim=1) == labels).float().mean().item()
+        if reached_step is None and acc >= config.OVERFIT_TARGET_ACC:
+            reached_step = step
 
-    print(f"  최종 train acc {acc:.4f} (목표 ≥ {config.OVERFIT_TARGET_ACC})")
+        if step == 1 or step % config.OVERFIT_LOG_EVERY == 0:
+            print(f"  step {step:4d} | loss {loss.item():.4f} | eval-mode acc {acc:.4f}")
+
+    print(f"  최종 eval-mode acc {acc:.4f} (목표 ≥ {config.OVERFIT_TARGET_ACC}) | "
+          f"목표 도달 step: {reached_step if reached_step else '미도달'}")
     return acc >= config.OVERFIT_TARGET_ACC
 
 

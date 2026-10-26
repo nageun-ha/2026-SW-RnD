@@ -2,6 +2,7 @@
 
 - 1주차: 데이터 분할·전처리 고정 (모델만 바꿔가며 공정하게 비교하기 위함)
 - 2주차: Baseline CNN + 학습/검증/평가 파이프라인 + 파이프라인 검증
+- 3주차: 구조 변형 5종 (bn, dropout, deep, wide, gap) — Baseline과 한 가지씩만 다름
 
 ## 폴더 구조
 
@@ -12,7 +13,10 @@ cifar10_cnn/
 ├── eda.py             # 탐색적 데이터 분석 및 시각화
 ├── models/            # 모델 레지스트리 (파일 하나 추가 = 모델 하나 추가)
 │   ├── __init__.py
-│   └── baseline.py    # BaselineCNN (Conv-ReLU-Pool × 3 + FC × 2)
+│   ├── baseline.py    # BaselineCNN (Conv-ReLU-Pool × 3 + FC × 2), 수정 금지
+│   ├── builder.py     # 3주차 공통 빌더 ConfigurableCNN (기본값 = Baseline)
+│   └── bn.py, dropout.py, deep.py, wide.py, gap.py   # 3주차 변형
+├── model_summary.py   # 빌더=Baseline 동일성 검사 + 모델별 파라미터 표
 ├── engine.py          # train_one_epoch / evaluate / confusion_matrix
 ├── train.py           # 학습 실행 (커맨드라인 인자로 하이퍼파라미터 변경)
 ├── evaluate.py        # 클래스별 정확도 + confusion matrix
@@ -23,6 +27,33 @@ cifar10_cnn/
 ├── results/           # 실험별 결과 폴더 (체크포인트 .pt는 git 제외)
 └── data/              # CIFAR-10 원본 (자동 다운로드, 공유 불필요)
 ```
+
+---
+
+# 3주차: 1차 구조 비교용 모델 변형
+
+모든 변형은 Baseline과 **딱 한 가지만** 다르다. 공통 빌더 `models/builder.py`의
+`ConfigurableCNN`을 상속하고 옵션 하나만 바꿔 넘긴다. (`baseline.py`, `train.py`, `engine.py`는 그대로)
+
+| 이름 | Baseline 대비 변경점 | 파라미터 | Baseline 대비 | 확인하려는 것 |
+|---|---|---|---|---|
+| baseline | (기준) Conv-ReLU-Pool × 3 + FC × 2 | 620,362 | 1.00x | — |
+| bn | 각 Conv 뒤 BatchNorm2d (Conv bias 제거) | 620,586 | +224 | 정규화 효과 |
+| dropout | FC 사이 Dropout(0.5) | 620,362 | 0 | 규제 효과 |
+| deep | 블록마다 Conv3x3 2개 (VGG식) | 814,122 | 1.31x | 깊이 효과 |
+| wide | 채널 2배 (64, 128, 256) | 1,422,218 | 2.29x | 너비 효과 |
+| gap | GAP + FC 1개 (Flatten+FC 2개 대신) | 94,538 | 0.15x | 분류부 구조 효과 |
+
+```bash
+python model_summary.py              # 빌더 기본값 = Baseline 확인 + 위 표 출력
+python sanity_check.py --model bn    # 새 모델 파이프라인 검증
+python train.py --model bn           # 학습 (나머지 하이퍼파라미터는 Baseline과 동일하게)
+```
+
+**결과 해석 시 주의**
+- wide: 마지막 채널이 2배라 첫 FC 입력도 2048 → 4096으로 커진다. 파라미터 증가분의 대부분이 이 FC.
+- gap: 파라미터가 약 1/6로 줄어 "분류부 구조" 효과와 "모델 크기 감소" 효과가 섞여 있다.
+- bn: Conv bias를 뺀 이유 — BN이 배치 평균을 빼면서 bias가 상쇄되고, BN의 β가 같은 역할을 하기 때문 (표현력 동일).
 
 ---
 

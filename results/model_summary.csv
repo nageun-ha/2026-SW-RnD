@@ -1,0 +1,7 @@
+model,params,diff_vs_baseline,ratio,output_shape,description
+baseline,620362,0,1.0,"(2, 10)",Conv-ReLU-Pool 블록 3개 + 완전연결층 2개로 이루어진 기본 CNN.
+gap,94538,-525824,0.15239166809056648,"(2, 10)",분류부를 Global Average Pooling + FC 1개로 바꾼 구조.
+dropout,620362,0,1.0,"(2, 10)",FC 층 사이에 Dropout(p=0.5) 추가.
+bn,620586,224,1.0003610794987443,"(2, 10)",각 Conv 뒤에 BatchNorm2d 추가 (Conv-BN-ReLU-Pool).
+deep,814122,193760,1.3123337664138035,"(2, 10)",블록마다 Conv3x3를 2개씩 쌓은 VGG식 구조.
+wide,1422218,801856,2.292561439933458,"(2, 10)",채널 수를 Baseline의 2배로 늘린 구조.
