@@ -1,12 +1,14 @@
 """
-3주차 구조 비교 실험 일괄 실행 스크립트.
+구조 비교 실험 일괄 실행 스크립트 (3주차, 4주차).
 
 train.py를 subprocess로 호출하므로 학습 로직은 train.py 그대로다.
 하이퍼파라미터는 --model, --seed, --epochs 외에는 넘기지 않는다 → 나머지는 모두 train.py 기본값(config.py).
 
 실행 예:
     python run_experiments.py --dry-run                 # 실행할 명령과 예상 시간만 출력
-    python run_experiments.py                           # 6개 모델 × 시드 3개 = 18개 실험
+    python run_experiments.py                           # 3주차: 6개 모델 × 시드 3개 = 18개 실험 (20 epoch)
+    python run_experiments.py --week 4                  # 4주차: 7개 모델 × 시드 3개 = 21개 실험 (40 epoch)
+    python run_experiments.py --week 4 --seeds 1        # 4주차 중 시드 1만 (팀원과 나눠 돌릴 때)
     python run_experiments.py --models bn gap --seeds 42
     python run_experiments.py --epochs 5                # 빠른 시험용 (결과 폴더 이름이 ep5로 따로 생김)
 
@@ -28,18 +30,50 @@ import config
 from models import list_models
 from train import make_run_name
 
-DEFAULT_MODELS = ["baseline", "bn", "dropout", "deep", "wide", "gap"]
 DEFAULT_SEEDS = [42, 1, 2]
+
+# 주차별 실험 조건. config.EPOCHS를 40으로 바꾸지 않는 이유:
+# 그 값은 train.py의 기본값이기도 해서, 바꾸면 3주차 명령이 ep40 폴더를 만들어 3주차 재현이 깨진다.
+WEEK_PRESETS = {
+    3: {"models": ["baseline", "bn", "dropout", "deep", "wide", "gap"],
+        "epochs": config.EPOCHS},
+    4: {"models": ["baseline", "bn", "bn_deep", "bn_wide", "bn_deep_wide",
+                   "bn_deep_wide_dropout", "bn_deep_wide_gap"],
+        "epochs": 40},
+}
+
+# 새 모델의 epoch 시간 추정용: 어떤 3주차 변경을 합친 모델인지 적어 둔다.
+# 여기 없는 모델은 자기 이름 하나로 계산한다 (3주차 모델이면 그대로 실측값을 쓰게 됨).
+TIME_PARTS = {
+    "baseline": [],
+    "bn_deep": ["bn", "deep"],
+    "bn_wide": ["bn", "wide"],
+    "bn_deep_wide": ["bn", "deep", "wide"],
+    "bn_deep_wide_dropout": ["bn", "deep", "wide", "dropout"],
+    "bn_deep_wide_gap": ["bn", "deep", "wide", "gap"],
+}
 
 
 def parse_args():
-    """커맨드라인 인자를 읽는다."""
+    """
+    커맨드라인 인자를 읽는다.
+    --models, --epochs를 직접 주면 프리셋 값보다 우선한다. 그래서 --week 4 --seeds 1처럼 일부만 바꿀 수 있다.
+    """
     parser = argparse.ArgumentParser(description="구조 비교 실험 일괄 실행")
-    parser.add_argument("--models", nargs="+", default=DEFAULT_MODELS, choices=list_models())
+    parser.add_argument("--week", type=int, default=3, choices=sorted(WEEK_PRESETS),
+                        help="실험 프리셋 (기본 3)")
+    parser.add_argument("--models", nargs="+", default=None, choices=list_models())
     parser.add_argument("--seeds", nargs="+", type=int, default=DEFAULT_SEEDS)
-    parser.add_argument("--epochs", type=int, default=config.EPOCHS)
+    parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--dry-run", action="store_true", help="실행하지 않고 명령과 예상 시간만 출력")
-    return parser.parse_args()
+    args = parser.parse_args()
+
+    preset = WEEK_PRESETS[args.week]
+    if args.models is None:
+        args.models = preset["models"]
+    if args.epochs is None:
+        args.epochs = preset["epochs"]
+    return args
 
 
 def run_name_for(model, seed, epochs):
@@ -87,17 +121,51 @@ def learn_epoch_times(models, seeds, epochs):
     return times
 
 
-def estimate_seconds(model, epochs, epoch_times):
+def load_week3_times():
+    """
+    3주차 요약표에서 모델별 epoch 시간 중앙값을 읽는다. (읽기만 하고 파일은 바꾸지 않는다)
+    평균이 아니라 중앙값을 쓰는 이유: 3주차 baseline은 장치가 섞여 평균이 10.37초로 왜곡됐다 (중앙값 6.92초).
+    """
+    path = config.RESULTS_DIR / "week3_summary.csv"
+    if not path.exists():
+        return {}
+    table = pd.read_csv(path, encoding="utf-8-sig")
+    return dict(zip(table["model"], table["epoch_time_sec_median"]))
+
+
+def relative_time(model, week3_times):
+    """
+    baseline을 1로 봤을 때 모델의 epoch 시간 비율을 추정한다.
+
+    파라미터 수로 추정하지 않는 이유: 3주차에 시간이 파라미터 수에 비례하지 않았다.
+    (wide는 파라미터 2.3배인데 시간 1.16배, gap은 파라미터 0.15배인데 시간 거의 같음)
+    조합 모델은 각 변경의 비율을 곱한다. 대략적인 값이며 3주차 자료가 없으면 1로 둔다.
+    """
+    base = week3_times.get("baseline")
+    ratio = 1.0
+    for part in TIME_PARTS.get(model, [model]):
+        if base and part in week3_times:
+            ratio *= week3_times[part] / base
+    return ratio
+
+
+def estimate_seconds(model, epochs, epoch_times, week3_times):
     """
     실험 하나의 예상 소요 시간(초).
-    그 모델의 측정값이 없으면 측정된 다른 모델들의 평균을, 그것도 없으면 config 기본 추정치를 쓴다.
+    1) 그 모델의 실측값이 있으면 그대로 쓴다.
+    2) 없으면 'baseline 기준 시간 × 상대 비율'로 추정한다. 기준 시간은 이번 실행 계획에서 이미 끝난
+       실험으로 환산하고, 끝난 실험이 없으면 config 기본값을 쓴다.
+       → PC 속도가 달라도 실험이 하나 끝나는 순간 그 PC 기준으로 추정이 맞춰진다.
     """
     if model in epoch_times:
         per_epoch = epoch_times[model]
-    elif epoch_times:
-        per_epoch = sum(epoch_times.values()) / len(epoch_times)
     else:
-        per_epoch = config.DEFAULT_EPOCH_SEC
+        if epoch_times:
+            scales = [t / relative_time(m, week3_times) for m, t in epoch_times.items()]
+            scale = sum(scales) / len(scales)
+        else:
+            scale = config.DEFAULT_EPOCH_SEC
+        per_epoch = scale * relative_time(model, week3_times)
     return per_epoch * epochs + config.RUN_STARTUP_SEC
 
 
@@ -141,6 +209,7 @@ def main():
     args = parse_args()
     plan = build_plan(args)
     epoch_times = learn_epoch_times(args.models, args.seeds, args.epochs)
+    week3_times = load_week3_times()
     pending = [p for p in plan if p["status"] != "done"]
 
     print(f"실험 {len(plan)}개 = 모델 {len(args.models)}개 × 시드 {len(args.seeds)}개 "
@@ -152,13 +221,14 @@ def main():
         if p["status"] == "done":
             print(f"[{i:2d}/{len(plan)}] 건너뜀(완료)  {p['name']}")
             continue
-        estimate = estimate_seconds(p["model"], args.epochs, epoch_times)
+        estimate = estimate_seconds(p["model"], args.epochs, epoch_times, week3_times)
         total_estimate += estimate
         note = "  ※ 미완료 기록 있음 → 처음부터 다시" if p["status"] == "partial" else ""
         print(f"[{i:2d}/{len(plan)}] 실행 예정    {' '.join(p['cmd'][1:])}"
               f"   (예상 {format_duration(estimate)}){note}")
     print(f"\n예상 총 소요 시간: {format_duration(total_estimate)}")
-    print("  (모델별 epoch 시간은 이미 끝난 실험의 history.csv 실측값 기준, 없으면 측정된 모델 평균)")
+    print("  (이미 끝난 실험은 history.csv 실측값 기준. 없는 모델은 3주차 시간 비율로 추정하며, "
+          "끝난 실험이 하나도 없으면 RTX 5060 기준값을 씀)")
 
     if args.dry_run or not pending:
         return
@@ -166,7 +236,7 @@ def main():
     failures = []
     session_start = time.perf_counter()
     for done_count, p in enumerate(pending, 1):
-        remaining = sum(estimate_seconds(q["model"], args.epochs, epoch_times)
+        remaining = sum(estimate_seconds(q["model"], args.epochs, epoch_times, week3_times)
                         for q in pending[done_count - 1:])
         print(f"\n{'=' * 70}\n[{done_count}/{len(pending)}] {p['name']} | "
               f"경과 {format_duration(time.perf_counter() - session_start)} | "
