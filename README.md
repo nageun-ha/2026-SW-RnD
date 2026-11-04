@@ -24,11 +24,14 @@ cifar10_cnn/
 ├── sanity_check.py    # 파이프라인 검증 4종 (overfit은 eval 모드 판정)
 ├── run_experiments.py # 3주차 비교 실험 일괄 실행 (모델 × 시드, 완료분 건너뛰기)
 ├── compare_results.py # 3주차 결과 취합 → 요약 CSV + 비교 그림 4종
+├── gradcam.py         # Grad-CAM 클래스 (직접 구현)
+├── visualize_gradcam.py # Grad-CAM 그림 생성 + 구현 검증 (학습 없음)
 ├── requirements.txt
 ├── splits/            # 분할 인덱스 + 정규화 통계 (★ 팀원과 공유)
 ├── figures/
 │   ├── *.png, *.csv   # 1주차 EDA 그림/표
-│   └── week3/         # 3주차 비교 그림 4종 (학습 곡선, loss, 정확도 막대, 파라미터 vs 정확도)
+│   ├── week3/         # 3주차 비교 그림 4종 (학습 곡선, loss, 정확도 막대, 파라미터 vs 정확도)
+│   └── gradcam/       # Grad-CAM 그림, 혼동행렬, 선택한 이미지 인덱스 CSV
 ├── results/
 │   ├── <실험이름>/     # 실험별 args.json, history.csv, val_*.csv/png (best.pt는 git 제외)
 │   ├── model_summary.csv           # 모델별 파라미터 수
@@ -36,6 +39,67 @@ cifar10_cnn/
 │   └── week3_per_class_val_acc.csv # 3주차 클래스별 val 정확도
 └── data/              # CIFAR-10 원본 (자동 다운로드, 공유 불필요)
 ```
+
+---
+
+# Grad-CAM 시각화
+
+저장된 체크포인트(`results/<실험이름>/best.pt`)로 모델이 이미지의 어느 위치를 보고 판단했는지 그린다. 학습은 하지 않는다.
+외부 라이브러리 없이 `gradcam.py`에 직접 구현했다.
+
+> 기본 데이터는 validation이다. `--test`는 6주차 최종 평가 전용이며, 실행하면 경고가 출력된다.
+> `.pt`는 git에 올라가지 않으므로 체크포인트가 있는 PC에서만 실행할 수 있다.
+
+## 실행
+
+```bash
+python visualize_gradcam.py --mode check
+python visualize_gradcam.py --mode single --runs baseline_sgd_lr0.01_bs128_ep20_aug_seed42
+python visualize_gradcam.py --mode compare --runs <run1> <run2> --per-class 1
+python visualize_gradcam.py --mode misclassified --runs <run> --pairs cat,dog automobile,truck --max-per-pair 8
+```
+
+| 모드 | 그림 |
+|---|---|
+| `single` | 이미지마다 [원본 / 히트맵 / 오버레이] |
+| `compare` | 행=이미지, 열=모델 (첫 열은 원본), 칸마다 예측과 confidence |
+| `misclassified` | 헷갈린 샘플의 [원본 / 예측 클래스 CAM / 정답 클래스 CAM] + 혼동행렬 |
+| `check` | 구현 검증 7개 (PASS/FAIL, 실패 시 종료 코드 1). 체크포인트가 다른 실험이면 `--runs`로 지정 |
+
+## 주요 옵션
+
+| 옵션 | 설명 |
+|---|---|
+| `--per-class k` | 클래스별 k장 선택 (기본 1, `config.SEED`로 고정) |
+| `--indices 12 57` 또는 `--indices <파일>_indices.csv` | 이미지를 직접 지정. CSV의 split이 현재 실행과 다르면 멈춘다 |
+| `--layer N` | `features[N]` 층으로 계산 (생략하면 마지막 Conv 다음 ReLU, 8×8) |
+| `--pairs cat,dog` | `misclassified`에서 볼 클래스 쌍 |
+| `--max-per-pair N` | 쌍마다 그릴 샘플 수 (기본 8, 양방향에 반씩) |
+
+`--layer` 번호는 구조마다 다른 층을 가리킬 수 있다. 실행할 때 출력되는 층 종류와 CAM 원본 크기를 확인한다.
+
+## 결과 위치
+
+`figures/gradcam/<모드>_<val|test>_<모델들>.png`와 같은 이름의 `_indices.csv`
+(`misclassified`는 `_confusion.png`, `_confusion.csv` 추가, `--layer`를 지정하면 이름에 `_layerN` 추가)
+
+6주차에 같은 이미지를 쓰려면 저장된 `_indices.csv`를 `--indices`에 넘긴다. 실험 이름이 길면 파일 이름이 줄어들고, 전체 목록은 CSV의 `runs` 열에 남는다.
+
+## 설계 결정
+
+| 항목 | 결정 | 이유 |
+|---|---|---|
+| inplace ReLU | 메모리에서만 끄고 전후 logits 일치를 assert로 확인 | 저장한 특징맵이 덮어써지거나 역전파 에러가 나는 것을 방지 |
+| 모드 | 항상 `model.eval()` | Dropout과 BN 때문에 결과가 흔들리거나 배치의 다른 이미지에 영향받는 것을 방지 |
+| 미분 대상 | softmax 전 logit | softmax를 거치면 다른 클래스 점수가 섞여 해석이 흐려짐 |
+| target layer | 마지막 Conv 다음 ReLU를 자동 탐색 | 층 번호를 고정하지 않아 모델 구조가 달라도 동작 |
+| 히트맵 색 | `inferno`, 0~1 고정 | 밝기가 한 방향으로 변해 없는 경계가 생기지 않고, 칸끼리 색을 비교할 수 있음 |
+
+## 해석 시 주의
+
+- CAM 원본은 8×8이라 32×32 그림에서도 세밀한 위치까지 가리키지는 않는다.
+- 이미지별로 0~1 정규화하므로 이미지끼리 밝기를 비교해 중요도를 판단하면 안 된다.
+- 학습되지 않은 모델의 CAM도 그럴듯해 보일 수 있으므로, 예측이 맞았는지와 `--mode check` 결과를 함께 본다.
 
 ---
 
