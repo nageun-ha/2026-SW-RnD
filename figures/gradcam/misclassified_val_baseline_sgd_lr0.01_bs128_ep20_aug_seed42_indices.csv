@@ -1,0 +1,17 @@
+split,position,cifar_index,true_class,runs,pair,pred_class,confidence
+val,2312,23136,cat,baseline_sgd_lr0.01_bs128_ep20_aug_seed42,"cat,dog",dog,0.7375606894493103
+val,435,4139,cat,baseline_sgd_lr0.01_bs128_ep20_aug_seed42,"cat,dog",dog,0.780424952507019
+val,3365,33914,cat,baseline_sgd_lr0.01_bs128_ep20_aug_seed42,"cat,dog",dog,0.664605975151062
+val,3871,38684,cat,baseline_sgd_lr0.01_bs128_ep20_aug_seed42,"cat,dog",dog,0.5828667879104614
+val,3661,36673,dog,baseline_sgd_lr0.01_bs128_ep20_aug_seed42,"cat,dog",cat,0.44070082902908325
+val,1553,15207,dog,baseline_sgd_lr0.01_bs128_ep20_aug_seed42,"cat,dog",cat,0.6889391541481018
+val,555,5233,dog,baseline_sgd_lr0.01_bs128_ep20_aug_seed42,"cat,dog",cat,0.4654362201690674
+val,2939,29608,dog,baseline_sgd_lr0.01_bs128_ep20_aug_seed42,"cat,dog",cat,0.5442886352539062
+val,1361,13044,automobile,baseline_sgd_lr0.01_bs128_ep20_aug_seed42,"automobile,truck",truck,0.47036606073379517
+val,1350,12927,automobile,baseline_sgd_lr0.01_bs128_ep20_aug_seed42,"automobile,truck",truck,0.7601239681243896
+val,1571,15381,automobile,baseline_sgd_lr0.01_bs128_ep20_aug_seed42,"automobile,truck",truck,0.6388720273971558
+val,975,9209,automobile,baseline_sgd_lr0.01_bs128_ep20_aug_seed42,"automobile,truck",truck,0.8779321312904358
+val,1641,16078,truck,baseline_sgd_lr0.01_bs128_ep20_aug_seed42,"automobile,truck",automobile,0.5945212841033936
+val,4092,40858,truck,baseline_sgd_lr0.01_bs128_ep20_aug_seed42,"automobile,truck",automobile,0.8419336676597595
+val,1242,11865,truck,baseline_sgd_lr0.01_bs128_ep20_aug_seed42,"automobile,truck",automobile,0.9500974416732788
+val,4570,45495,truck,baseline_sgd_lr0.01_bs128_ep20_aug_seed42,"automobile,truck",automobile,0.5653297305107117
