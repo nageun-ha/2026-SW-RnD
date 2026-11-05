@@ -1,0 +1,17 @@
+{
+  "model": "bn",
+  "epochs": 20,
+  "batch_size": 128,
+  "optimizer": "sgd",
+  "lr": 0.01,
+  "momentum": 0.9,
+  "weight_decay": 0.0005,
+  "seed": 42,
+  "augment": true,
+  "run_name": null,
+  "overwrite": false,
+  "device": "cuda",
+  "num_params": 620586,
+  "torch_version": "2.9.1+cu130",
+  "platform": "Windows-11-10.0.26200-SP0"
+}
