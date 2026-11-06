@@ -33,7 +33,7 @@ cifar10_cnn/
 │   ├── week3/         # 3주차 비교 그림 4종 (학습 곡선, loss, 정확도 막대, 파라미터 vs 정확도)
 │   └── gradcam/       # Grad-CAM 그림, 혼동행렬, 선택한 이미지 인덱스 CSV
 ├── results/
-│   ├── <실험이름>/     # 실험별 args.json, history.csv, val_*.csv/png (best.pt는 git 제외)
+│   ├── <실험이름>/     # 실험별 args.json, history.csv, val_*.csv/png (best.pt 포함)
 │   ├── model_summary.csv           # 모델별 파라미터 수
 │   ├── week3_summary.csv           # 3주차 모델별 요약 (시드 평균 ± 표준편차)
 │   └── week3_per_class_val_acc.csv # 3주차 클래스별 val 정확도
