@@ -16,14 +16,15 @@ cifar10_cnn/
 │   ├── __init__.py
 │   ├── baseline.py    # BaselineCNN (Conv-ReLU-Pool × 3 + FC × 2), 수정 금지
 │   ├── builder.py     # 3주차 공통 빌더 ConfigurableCNN (기본값 = Baseline)
-│   └── bn.py, dropout.py, deep.py, wide.py, gap.py   # 3주차 변형
+│   ├── bn.py, dropout.py, deep.py, wide.py, gap.py   # 3주차 변형
+│   └── bn_deep.py, bn_wide.py, bn_deep_wide.py, bn_deep_wide_dropout.py, bn_deep_wide_gap.py   # 4주차 변형
 ├── model_summary.py   # 빌더=Baseline 동일성 검사 + 모델별 파라미터 표
 ├── engine.py          # train_one_epoch / evaluate / confusion_matrix
 ├── train.py           # 학습 실행 (커맨드라인 인자로 하이퍼파라미터 변경)
 ├── evaluate.py        # 클래스별 정확도 + confusion matrix
 ├── sanity_check.py    # 파이프라인 검증 4종 (overfit은 eval 모드 판정)
-├── run_experiments.py # 3주차 비교 실험 일괄 실행 (모델 × 시드, 완료분 건너뛰기)
-├── compare_results.py # 3주차 결과 취합 → 요약 CSV + 비교 그림 4종
+├── run_experiments.py # 비교 실험 일괄 실행 (--week 3 / 4, 모델 × 시드, 완료분 건너뛰기)
+├── compare_results.py # 주차별 결과 취합 → 요약 CSV + 비교 그림 4종 (--week 4는 추가 분석 4종)
 ├── gradcam.py         # Grad-CAM 클래스 (직접 구현)
 ├── visualize_gradcam.py # Grad-CAM 그림 생성 + 구현 검증 (학습 없음)
 ├── requirements.txt
@@ -31,12 +32,14 @@ cifar10_cnn/
 ├── figures/
 │   ├── *.png, *.csv   # 1주차 EDA 그림/표
 │   ├── week3/         # 3주차 비교 그림 4종 (학습 곡선, loss, 정확도 막대, 파라미터 vs 정확도)
+│   ├── week4/         # 4주차 비교 그림 4종 (같은 구성)
 │   └── gradcam/       # Grad-CAM 그림, 혼동행렬, 선택한 이미지 인덱스 CSV
 ├── results/
 │   ├── <실험이름>/     # 실험별 args.json, history.csv, val_*.csv/png (best.pt 포함)
 │   ├── model_summary.csv           # 모델별 파라미터 수
 │   ├── week3_summary.csv           # 3주차 모델별 요약 (시드 평균 ± 표준편차)
-│   └── week3_per_class_val_acc.csv # 3주차 클래스별 val 정확도
+│   ├── week3_per_class_val_acc.csv # 3주차 클래스별 val 정확도
+│   └── week4_*.csv                 # 4주차 요약, 2×2 효과표, 변형 비교, cat/dog, 20 vs 40 epoch, 클래스별
 └── data/              # CIFAR-10 원본 (자동 다운로드, 공유 불필요)
 ```
 
@@ -48,7 +51,8 @@ cifar10_cnn/
 외부 라이브러리 없이 `gradcam.py`에 직접 구현했다.
 
 > 기본 데이터는 validation이다. `--test`는 6주차 최종 평가 전용이며, 실행하면 경고가 출력된다.
-> `.pt`는 git에 올라가지 않으므로 체크포인트가 있는 PC에서만 실행할 수 있다.
+> 체크포인트(`best.pt`)가 있는 실험만 실행할 수 있다. 저장소에는 4주차 21개 실험과 3주차 baseline seed 42의 `best.pt`가 있고,
+> 나머지 3주차 실험은 `best.pt`가 없다.
 
 ## 실행
 
@@ -135,6 +139,90 @@ BN을 고정한 상태에서 Deep과 Wide의 조합 효과(2×2)를 보고, Drop
 - 시드 3개 중 2개 이상에서 best epoch(최고 val acc가 처음 나온 epoch)이 36~40이면 해당 모델에 "아직 수렴 안 됨"으로 표시한다.
 - 이 표시는 후보 제외 사유가 아니다. 5주차 epoch 수를 정할 때 참고하고, 표시된 모델의 주 지표는 낮게 평가됐을 수 있음을 결과에 함께 적는다.
 
+## 실행과 취합
+
+```bash
+python run_experiments.py --week 4 --dry-run   # 실행할 명령과 예상 시간만 출력
+python run_experiments.py --week 4             # 21개 실험 실행 (RTX 5060에서 총 4시간 38분)
+python compare_results.py --week 4             # 결과 취합 → results/week4_*.csv + figures/week4/*.png
+```
+- `compare_results.py --week 4`는 epochs=40이고 4주차 모델 7개인 실험만 읽는다. 같은 `results/`에 있는 3주차 ep20 폴더는 읽지 않고 목록만 출력한다.
+- 폴더 이름과 `args.json`의 epoch가 다르거나, 끝나지 않은 실험, 같은 (모델, 시드) 중복이 있으면 에러로 멈춘다.
+- 클래스별 정확도를 위해 21개 실험에 `evaluate.py`를 val로 실행한다 (`--test` 없음).
+
+## 결과 요약
+
+7개 모델 × 시드 3개, 40 epoch, validation 기준 (테스트셋 미사용). 전체 표: `results/week4_summary.csv`
+
+| 순위 | 모델 | 파라미터 | 마지막 5 epoch 평균 (%, 주 지표) | best val acc (%) | 시드별 best epoch | train−val 차이 (%p) | 수렴 |
+|---|---|---|---|---|---|---|---|
+| 1 | bn_deep_wide | 2,197,706 | **88.91 ± 0.27** | 89.82 ± 0.21 | 32, 32, 39 | 7.17 ± 0.74 | |
+| 2 | bn_deep_wide_dropout | 2,197,706 | 88.13 ± 0.27 | 89.65 ± 0.19 | 39, 31, 38 | 5.33 ± 0.17 | 아직 수렴 안 됨 |
+| 3 | bn_deep | 814,570 | 87.55 ± 0.36 | 88.25 ± 0.22 | 40, 38, 38 | 5.02 ± 0.49 | 아직 수렴 안 됨 |
+| 4 | bn_deep_wide_gap | 1,148,874 | 87.11 ± 0.19 | 88.59 ± 0.41 | 35, 28, 39 | 8.00 ± 1.13 | |
+| 5 | bn_wide | 1,422,666 | 86.00 ± 0.18 | 86.85 ± 0.32 | 39, 40, 40 | 4.02 ± 1.00 | 아직 수렴 안 됨 |
+| 6 | bn | 620,586 | 84.38 ± 0.09 | 85.62 ± 0.16 | 37, 40, 38 | 3.46 ± 1.52 | 아직 수렴 안 됨 |
+| 기준 | baseline | 620,362 | 83.27 ± 0.36 | 83.86 ± 0.26 | 39, 40, 40 | 3.90 ± 1.18 | 아직 수렴 안 됨 |
+
+- train−val 차이는 마지막 epoch의 (train acc − val acc)다. train acc는 증강이 켜지고 학습 모드(Dropout/BN)인 상태로 잰 값이라 근사치다.
+
+**BN 고정 2×2** (`results/week4_factorial.csv`, last5 기준, 단위 %p)
+
+| | Wide 없음 | Wide 있음 |
+|---|---|---|
+| **Deep 없음** | bn 84.38 ± 0.09 | bn_wide 86.00 ± 0.18 |
+| **Deep 있음** | bn_deep 87.55 ± 0.36 | bn_deep_wide 88.91 ± 0.27 |
+
+- Deep 효과 **+3.17 ± 0.37**, Wide 효과 **+1.61 ± 0.21**: 둘 다 시드 편차보다 크고, Deep이 Wide의 약 2배다.
+- 상호작용 −0.26 ± 0.49 (best 기준 +0.34 ± 0.47): 0과 구분되지 않는다. 두 효과가 거의 그대로 더해진다 (단순 합 예상 89.16%, 실제 88.91%).
+- Deep은 파라미터를 1.31배, Wide는 2.29배로 늘리므로 Deep이 파라미터 대비 효율도 높다.
+- 3주차(BN 없음, 20 epoch)에서는 Wide가 Deep보다 컸다. BN과 epoch 수가 함께 바뀌어 어느 쪽 때문인지는 알 수 없다.
+
+**큰 모델에서 Dropout·GAP** (`results/week4_variants.csv`, bn_deep_wide 대비)
+- 모델이 커질수록 train−val 차이가 커진다 (bn 3.46 → bn_deep_wide 7.17%p).
+  bn_deep_wide는 val loss가 20~32 epoch에 가장 낮고 이후 다시 오른다 → 과적합 경향 (`figures/week4/2_loss_curves.png`).
+- **Dropout**: train−val 차이는 −1.84%p로 줄었지만, last5 −0.78%p(시드 편차보다 큼), best −0.17%p(편차 이하)로 정확도 이득은 없다.
+  train acc를 Dropout이 켜진 상태로 재므로 차이 감소의 일부는 측정 방식 때문이다.
+- **GAP**: last5 −1.79%p, 파라미터 약 절반. 3주차(FC 대비 −9.33%p)보다 격차가 크게 줄었지만, BN·구조·epoch가 함께 달라 원인은 단정할 수 없다.
+  파라미터가 더 적은 bn_deep(87.55%)보다 낮아 파라미터 대비 효율은 좋지 않다.
+
+**클래스별 val 정확도** (`results/week4_per_class_val_acc.csv`, `results/week4_cat_dog.csv`)
+- 구조를 바꾼 6개 모델 모두 baseline 대비 cat의 향상 폭이 가장 크다 (bn_deep_wide: 65.93 → 84.87%, +18.9%p).
+- 그래도 cat·dog가 가장 낮은 두 클래스이고, bn_deep_wide_dropout은 cat/dog 시드 표준편차가 6.8~8.3%p로 크다.
+
+**20 vs 40 epoch** (`results/week4_epoch_compare.csv`)
+- baseline last5 +3.47%p, bn +2.97%p로 epoch를 늘린 이득이 시드 편차보다 크다.
+- 20 epoch 결과는 다른 PC·PyTorch 버전에서 학습되어 epoch 시간 차이는 비교하지 않는다.
+
+## 5주차 후보 (선정 기준 그대로 적용)
+
+1. baseline 제외 last5 순위: bn_deep_wide 88.91 > bn_deep_wide_dropout 88.13 > bn_deep 87.55 > bn_deep_wide_gap 87.11 > bn_wide 86.00 > bn 84.38
+2. 2위와 1위의 차이 0.78%p가 두 표준편차 중 큰 값(0.27)보다 커서, "1위와 차이 없음" 그룹은 bn_deep_wide 하나다.
+3. 남은 모델이 1개이므로 그룹 밖 다른 구조 중 1위를 더한다. dropout·gap은 bn_deep_wide와 특징 추출부가 같은 구조라 제외되고, bn_deep이 들어간다.
+
+| 후보 | 파라미터 | 참고 |
+|---|---|---|
+| **bn_deep_wide** | 2,197,706 | 주 지표 1위. 과적합 경향이 있어 규제·학습률 조정 여지가 있다 |
+| **bn_deep** | 814,570 | "아직 수렴 안 됨": 주 지표가 낮게 평가됐을 수 있다 |
+
+**한계 (기준은 바꾸지 않고 기록만 함)**
+- 시드 3개라 표준편차 추정이 불안정하고, "시드 편차보다 큼"은 유의성 검정이 아니다. val 5,000장 자체의 오차(약 ±0.45%p)는 시드 편차에 들어 있지 않다.
+- 모든 모델이 같은 val로 평가되고 선정도 val로 했으므로 성능이 약간 낙관적이다. 한 가지 하이퍼파라미터 설정에서만 비교했다.
+- 7개 중 5개 모델이 "아직 수렴 안 됨"이라 epoch를 늘리면 순위가 바뀔 수 있다.
+- last5는 늦게 수렴하는 모델(Dropout)에 불리하고, best epoch는 epoch마다 약 1%p 흔들려 수렴 판정이 불안정하다.
+- Dropout은 best 기준으로 1위와 차이가 없지만, 같은 구조 규칙 때문에 후보 추가 단계에서 검토되지 않았다.
+
+## 그림
+
+모두 `figures/week4/` 폴더에 있다 (`python compare_results.py --week 4`로 생성).
+
+| 그림 | 경로 | 내용 |
+|---|---|---|
+| 학습 곡선 (val acc) | `figures/week4/1_val_acc_curves.png` | epoch별 val acc, 시드 평균선 + 최소~최대 띠, 16~40 epoch 확대 |
+| 학습 곡선 (loss) | `figures/week4/2_loss_curves.png` | epoch별 train/val loss (큰 모델의 후반 val loss 상승) |
+| best val acc 막대 | `figures/week4/3_best_val_acc_bar.png` | 모델별 평균 ± 표준편차, 시드별 점, baseline 기준선 |
+| 파라미터 수 vs 정확도 | `figures/week4/4_params_vs_acc.png` | 같은 파라미터 수의 모델은 옆으로 살짝 밀어 표시 |
+
 ---
 
 # 3주차: 1차 모델 구조 비교
@@ -176,8 +264,12 @@ python run_experiments.py                # 실제 실행
 - 여러 명이 동시에 돌릴 때는 시드를 나눈다: `python run_experiments.py --seeds 1`
 
 ```bash
-python compare_results.py                # 결과 취합 → results/week3_*.csv + figures/week3/*.png
+python compare_results.py --overwrite-week3   # 결과 취합 → results/week3_*.csv + figures/week3/*.png
+python compare_results.py --verify-week3      # 다시 계산해 기존 week3_summary.csv와 같은지만 확인 (파일을 쓰지 않음)
 ```
+- 3주차 출력은 확정본이라, 이미 있으면 `--overwrite-week3` 없이는 덮어쓰지 않고 멈춘다.
+- `--verify-week3` 결과(4주차 시점): 정확도·epoch·파라미터 열과 그림 4종은 모두 같고, 시간 열만 최대 3.8초 다르다.
+  `week3_summary.csv`를 만든 뒤 같은 시드로 다시 학습한 ep20 기록이 올라왔기 때문이다 (정확도는 같고 시간만 다름).
 - 18개 실험의 `history.csv`가 `results/` 아래에 모두 있어야 한다 (팀원 결과는 `git pull`로 받기)
 - 클래스별 정확도는 `best.pt`가 있는 실험만 `evaluate.py`로 계산된다 (`--no-eval`이면 기존 CSV만 사용)
 
@@ -227,7 +319,7 @@ python compare_results.py                # 결과 취합 → results/week3_*.csv
 
 ## 그림
 
-모두 `figures/week3/` 폴더에 있다 (`python compare_results.py`로 생성).
+모두 `figures/week3/` 폴더에 있다 (`python compare_results.py --overwrite-week3`로 생성).
 
 | 그림 | 경로 | 내용 |
 |---|---|---|

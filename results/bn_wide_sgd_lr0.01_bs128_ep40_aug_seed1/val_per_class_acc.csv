@@ -1,0 +1,11 @@
+class,correct,total,accuracy
+airplane,447,500,0.894
+automobile,459,500,0.918
+bird,410,500,0.82
+cat,380,500,0.76
+deer,429,500,0.858
+dog,389,500,0.778
+frog,458,500,0.916
+horse,440,500,0.88
+ship,451,500,0.902
+truck,470,500,0.94

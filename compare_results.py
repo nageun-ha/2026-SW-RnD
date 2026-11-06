@@ -7,6 +7,13 @@
     python compare_results.py --week 4 --no-eval      # evaluate.py를 호출하지 않고 이미 있는 CSV만 사용
     python compare_results.py --week 4 --force-eval   # 클래스별 정확도 CSV가 있어도 evaluate.py를 다시 실행
     python compare_results.py --verify-week3   # 3주차를 다시 계산해 기존 week3_summary.csv와 같은지 확인 (파일을 쓰지 않음)
+    python compare_results.py --overwrite-week3       # 3주차 출력을 정말로 다시 만들 때만 (기본은 덮어쓰기 거부)
+
+3주차 출력 보호:
+    3주차 결과(results/week3_*.csv, figures/week3/)는 보고서에 쓴 확정본이다. --week 기본값이 3이라
+    옵션 없이 실행하면 실수로 덮어쓸 수 있으므로, week3_summary.csv가 이미 있으면 --overwrite-week3 없이는 멈춘다.
+    (지금 results/의 ep20 history.csv는 week3_summary.csv를 만든 뒤 다시 올라온 기록이라 정확도는 같지만
+     epoch_time_sec가 달라, 덮어쓰면 시간 열이 바뀐다. 차이는 --verify-week3로 확인할 수 있다.)
 
 주차별 입력과 출력 (서로 섞이지 않는다):
     3주차  읽는 것: epochs=20 이고 모델이 baseline, bn, dropout, deep, wide, gap 인 실험
@@ -183,6 +190,8 @@ def parse_args():
                              "기본: 3주차 3개, 4주차 전체")
     parser.add_argument("--verify-week3", action="store_true",
                         help="3주차를 다시 계산해 기존 week3_summary.csv·그림과 같은지 확인 (아무 파일도 쓰지 않음)")
+    parser.add_argument("--overwrite-week3", action="store_true",
+                        help="이미 있는 3주차 출력(week3_*.csv, figures/week3/)을 덮어쓰도록 허용")
     parser.add_argument("--no-eval", action="store_true",
                         help="evaluate.py를 호출하지 않고 이미 있는 val_per_class_acc.csv만 사용")
     parser.add_argument("--force-eval", action="store_true",
@@ -933,6 +942,13 @@ def main():
             sys.exit(1)
 
     week, cfg, paths = args.week, WEEK_CONFIGS[args.week], week_paths(args.week)
+    if week == 3 and paths["summary"].exists() and not args.overwrite_week3:
+        # 확정된 3주차 출력을 실수로 덮어쓰지 않도록 막는다 (파일 맨 위 '3주차 출력 보호' 참고)
+        print(f"[중단] 3주차 출력이 이미 있습니다: {paths['summary']}\n"
+              "  4주차를 취합하려면:        python compare_results.py --week 4\n"
+              "  3주차 값만 확인하려면:     python compare_results.py --verify-week3\n"
+              "  정말 3주차를 다시 만들려면: python compare_results.py --overwrite-week3")
+        sys.exit(1)
     top_k = args.top_k if args.top_k is not None else cfg["default_top_k"]
     try:
         runs, ignored = load_runs(cfg["models"], cfg["epochs"])

@@ -1,0 +1,7 @@
+﻿model,epochs,n_seeds,best_val_acc_pct_mean,best_val_acc_pct_std,last5_val_acc_pct_mean,last5_val_acc_pct_std,val_acc_ep20_pct_mean,val_acc_ep20_pct_std,best_epoch_mean,best_epoch_std,overfit_gap_pp_mean,overfit_gap_pp_std,epoch_time_sec_mean,epoch_time_sec_std,best_val_acc_pct_vs_seed_std,last5_val_acc_pct_vs_seed_std
+baseline,20,3,80.5,0.6391,79.8013,0.8404,80.3733,0.7527,18.3333,1.5275,1.0022,0.6701,12.3501,4.3502,,
+baseline,40,3,83.86,0.26,83.2707,0.3617,80.2133,0.369,39.6667,0.5774,3.8956,1.1823,17.7377,0.5852,,
+baseline,delta_40_minus_20,3,3.36,0.6899,3.4693,0.9149,-0.16,0.8383,21.3333,1.633,2.8933,1.359,5.3876,4.3894,larger,larger
+bn,20,3,82.7267,0.7311,81.4093,0.3684,82.4267,0.9201,19.3333,1.1547,0.7237,0.9261,9.5739,0.08,,
+bn,40,3,85.62,0.1637,84.384,0.0946,82.8067,0.6842,38.3333,1.5275,3.457,1.5165,17.6602,0.1812,,
+bn,delta_40_minus_20,3,2.8933,0.7492,2.9747,0.3803,0.38,1.1466,19.0,1.9149,2.7333,1.777,8.0863,0.1981,larger,larger

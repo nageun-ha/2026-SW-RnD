@@ -1,0 +1,8 @@
+﻿model,cat_mean_pct,cat_std_pct,cat_diff_vs_baseline_pp,cat_vs_seed_std,dog_mean_pct,dog_std_pct,dog_diff_vs_baseline_pp,dog_vs_seed_std,cat_dog_mean_pct
+bn_deep_wide,84.8667,0.5774,18.9333,larger,81.4667,1.222,6.9333,larger,83.1667
+bn_deep_wide_dropout,78.1333,8.2954,12.2,larger,79.2667,6.801,4.7333,smaller,78.7
+bn_deep_wide_gap,82.6,4.2,16.6667,larger,81.1333,1.222,6.6,larger,81.8667
+bn_deep,77.5333,4.884,11.6,larger,82.6,1.0392,8.0667,larger,80.0667
+bn_wide,75.5333,2.3352,9.6,larger,73.9333,3.3486,-0.6,smaller,74.7333
+bn,71.4,6.2865,5.4667,smaller,77.8,4.2568,3.2667,smaller,74.6
+baseline,65.9333,2.4194,,-,74.5333,2.9143,,-,70.2333

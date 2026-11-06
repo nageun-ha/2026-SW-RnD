@@ -1,0 +1,4 @@
+﻿model,n_seeds,num_params,best_val_acc_mean,best_val_acc_std,best_val_acc_diff_vs_ref_pp,best_val_acc_diff_std_pp,best_val_acc_vs_seed_std,last5_val_acc_mean,last5_val_acc_std,last5_val_acc_diff_vs_ref_pp,last5_val_acc_diff_std_pp,last5_val_acc_vs_seed_std,overfit_gap_mean,overfit_gap_std,overfit_gap_diff_vs_ref_pp,overfit_gap_diff_std_pp,overfit_gap_vs_seed_std
+bn_deep_wide,3,2197706,89.82,0.2117,,,-,88.9053,0.2666,,,-,7.1711,0.7379,,,-
+bn_deep_wide_dropout,3,2197706,89.6533,0.1858,-0.1667,0.2817,smaller,88.1267,0.2691,-0.7787,0.3787,larger,5.3319,0.1689,-1.8393,0.757,larger
+bn_deep_wide_gap,3,1148874,88.5933,0.4149,-1.2267,0.4658,larger,87.112,0.1886,-1.7933,0.3266,larger,8.0015,1.1349,0.8304,1.3537,smaller
