@@ -8,6 +8,18 @@
     python compare_results.py --week 4 --force-eval   # 클래스별 정확도 CSV가 있어도 evaluate.py를 다시 실행
     python compare_results.py --verify-week3   # 3주차를 다시 계산해 기존 week3_summary.csv와 같은지 확인 (파일을 쓰지 않음)
     python compare_results.py --overwrite-week3       # 3주차 출력을 정말로 다시 만들 때만 (기본은 덮어쓰기 거부)
+    python compare_results.py --week 4 --verify       # 4주차를 임시 폴더에 다시 만들어 기존 출력과 같은지 확인 (파일을 쓰지 않음)
+    python compare_results.py --week 5                # 5주차: 단계별 표 + 모델별 최종 설정 + 그림 3종
+
+5주차 (규칙은 week5_selection.py, 기준은 README "5주차 선정 기준")
+    읽는 것: bn_deep_wide, bn_deep 중 batch 128·SGD·momentum 0.9·증강인 실험 (4주차 기본 설정 결과 포함)
+    쓰는 것: results/week5_stageA.csv   A: lr × scheduler 6조합 (seed 42), 1위와의 차이, 차이 없음 그룹, 승자
+             results/week5_stageB.csv   B: A 승자 위에서 wd 4개 (seed 42)
+             results/week5_final.csv    C: 튜닝한 설정 vs 4주차 기본 설정 (시드 3개 평균 ± 표준편차), 최종 설정, D 필요 여부
+             figures/week5/             1_stageA_val_acc_curves, 2_stageB_wd_last5, 3_final_vs_default
+    단계가 덜 끝났으면 끝난 부분까지만 표에 채우고, 다음 단계는 "앞 단계 미완료"로 남긴다 (에러로 멈추지 않음).
+    3·4주차 취합은 기본 하이퍼파라미터(lr 0.01, wd 5e-4, scheduler none, momentum 0.9) 실험만 읽으므로
+    5주차 결과가 results/에 생겨도 3·4주차 표는 바뀌지 않는다.
 
 3주차 출력 보호:
     3주차 결과(results/week3_*.csv, figures/week3/)는 보고서에 쓴 확정본이다. --week 기본값이 3이라
@@ -95,6 +107,8 @@
 """
 
 import argparse
+import contextlib
+import io
 import json
 import math
 import os
@@ -111,30 +125,49 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+import week5_selection as w5  # torch를 쓰지 않는 규칙 모듈 (run_experiments.py와 같은 승자 규칙)
+
 # ---------------------------------------------------------------------
 # 설정 (config.py는 torch를 import하고 장치 검사까지 하므로, 이 스크립트는 일부러 import하지 않는다)
 # ---------------------------------------------------------------------
 PROJECT_DIR = Path(__file__).resolve().parent
 RESULTS_DIR = PROJECT_DIR / "results"
+FIGURES_DIR = PROJECT_DIR / "figures"
 
 # 주차별 입력 조건. 이 조건에 맞는 실험만 읽는다 (run_experiments.py의 WEEK_PRESETS와 같은 모델·epoch).
 WEEK_CONFIGS = {
     3: {"models": ["baseline", "bn", "dropout", "deep", "wide", "gap"], "epochs": 20, "default_top_k": 3},
     4: {"models": ["baseline", "bn", "bn_deep", "bn_wide", "bn_deep_wide",
                    "bn_deep_wide_dropout", "bn_deep_wide_gap"], "epochs": 40, "default_top_k": None},  # None = 전체
+    5: {"models": w5.MODELS, "epochs": w5.EPOCHS, "default_top_k": None},  # 5주차는 run_week5가 따로 처리
 }
 
+# 3·4주차 실험의 하이퍼파라미터 (config.py 기본값). 5주차에 이 값을 바꾼 실험이 results/에 함께 생기므로,
+# 3·4주차 취합은 이 값과 같은 실험만 읽는다. scheduler가 없는 args.json(4주차 이전)은 none으로 본다.
+DEFAULT_HPARAMS = {"lr": w5.DEFAULT_LR, "weight_decay": w5.DEFAULT_WEIGHT_DECAY,
+                   "momentum": w5.FIXED_SETTINGS["momentum"], "scheduler": w5.DEFAULT_SCHEDULER}
 
-def week_paths(week):
-    """주차별 출력 경로. 모든 파일 이름이 week{N}_ 로 시작하므로 다른 주차 출력을 덮어쓰지 않는다."""
+# --verify로 다시 만들어 비교할 파일. 3주차 클래스별 표는 체크포인트가 없어 다시 계산할 수 없으므로 뺀다.
+VERIFY_TABLES = {3: ["summary"], 4: ["summary", "factorial", "variants", "epoch_compare", "per_class", "cat_dog"]}
+
+
+def week_paths(week, results_dir=RESULTS_DIR, figures_dir=FIGURES_DIR):
+    """
+    주차별 출력 경로. 모든 파일 이름이 week{N}_ 로 시작하므로 다른 주차 출력을 덮어쓰지 않는다.
+    results_dir, figures_dir를 바꾸면 다른 곳(--verify의 임시 폴더)에 같은 이름으로 저장한다.
+    """
+    results_dir, figures_dir = Path(results_dir), Path(figures_dir)
     return {
-        "summary": RESULTS_DIR / f"week{week}_summary.csv",
-        "per_class": RESULTS_DIR / f"week{week}_per_class_val_acc.csv",
-        "factorial": RESULTS_DIR / f"week{week}_factorial.csv",
-        "variants": RESULTS_DIR / f"week{week}_variants.csv",
-        "cat_dog": RESULTS_DIR / f"week{week}_cat_dog.csv",
-        "epoch_compare": RESULTS_DIR / f"week{week}_epoch_compare.csv",
-        "fig_dir": PROJECT_DIR / "figures" / f"week{week}",
+        "summary": results_dir / f"week{week}_summary.csv",
+        "per_class": results_dir / f"week{week}_per_class_val_acc.csv",
+        "factorial": results_dir / f"week{week}_factorial.csv",
+        "variants": results_dir / f"week{week}_variants.csv",
+        "cat_dog": results_dir / f"week{week}_cat_dog.csv",
+        "epoch_compare": results_dir / f"week{week}_epoch_compare.csv",
+        "stage_a": results_dir / f"week{week}_stageA.csv",
+        "stage_b": results_dir / f"week{week}_stageB.csv",
+        "final": results_dir / f"week{week}_final.csv",
+        "fig_dir": figures_dir / f"week{week}",
     }
 
 
@@ -182,9 +215,11 @@ def color_of(model, _fallback={}):
 
 def parse_args():
     """커맨드라인 인자를 읽는다."""
-    parser = argparse.ArgumentParser(description="구조 비교 결과 취합 (3주차 / 4주차)")
+    parser = argparse.ArgumentParser(description="비교 결과 취합 (3주차 / 4주차 / 5주차)")
     parser.add_argument("--week", type=int, default=3, choices=sorted(WEEK_CONFIGS),
-                        help="취합할 주차 (기본 3). 3 = ep20 × 6모델, 4 = ep40 × 7모델")
+                        help="취합할 주차 (기본 3). 3 = ep20 × 6모델, 4 = ep40 × 7모델, 5 = 하이퍼파라미터 튜닝")
+    parser.add_argument("--verify", action="store_true",
+                        help="3·4주차: 임시 폴더에 다시 만들어 기존 출력과 같은지 확인 (아무 파일도 쓰지 않음)")
     parser.add_argument("--top-k", type=int, default=None,
                         help="클래스별 정확도를 비교할 상위 모델 수 (Baseline 제외). "
                              "기본: 3주차 3개, 4주차 전체")
@@ -206,9 +241,22 @@ class ResultsError(Exception):
     """집계에 쓸 수 없는 결과가 섞여 있을 때 (다른 주차 결과 혼입, 끝나지 않은 실험 등)."""
 
 
+def is_default_hparams(args):
+    """3·4주차와 같은 하이퍼파라미터(DEFAULT_HPARAMS)로 학습한 실험인지."""
+    for key, expected in DEFAULT_HPARAMS.items():
+        actual = args.get(key, w5.DEFAULT_SCHEDULER if key == "scheduler" else None)
+        if isinstance(expected, float):
+            if actual is None or not w5.same(actual, expected):
+                return False
+        elif actual != expected:
+            return False
+    return True
+
+
 def load_runs(models, epochs):
     """
-    results/ 아래에서 (모델 in models) 이고 (args.json의 epochs == epochs) 인 실험만 읽는다.
+    results/ 아래에서 (모델 in models) 이고 (args.json의 epochs == epochs) 이고
+    (하이퍼파라미터가 기본값)인 실험만 읽는다. 기본값 조건은 5주차 튜닝 실험이 섞이지 않게 하기 위함이다.
     반환: (읽은 실험 목록, 읽지 않은 실험 목록)
 
     다른 주차 결과가 섞이면 ResultsError로 멈춘다:
@@ -228,8 +276,9 @@ def load_runs(models, epochs):
         args = json.loads(args_path.read_text(encoding="utf-8"))
         history = pd.read_csv(history_path)
         run = {"name": run_dir.name, "model": args["model"], "seed": args["seed"],
-               "args": args, "history": history}
-        (selected if args["model"] in models and args.get("epochs") == epochs else ignored).append(run)
+               "args": args, "history": history, "tuned": not is_default_hparams(args)}
+        wanted = args["model"] in models and args.get("epochs") == epochs and not run["tuned"]
+        (selected if wanted else ignored).append(run)
 
     tag = f"_ep{epochs}_"
     problems, seen = [], {}
@@ -245,7 +294,8 @@ def load_runs(models, epochs):
             problems.append(f"{run['name']}: {seen[key]}와 (모델, 시드)가 같습니다 (중복)")
         seen[key] = run["name"]
     for run in ignored:  # 반대 방향: 이름은 목표 ep인데 args.json의 epochs가 다른 경우
-        if run["model"] in models and tag in run["name"]:
+        # (epochs가 같은데 튜닝 설정이라 빠진 5주차 실험은 섞인 것이 아니므로 제외)
+        if run["model"] in models and tag in run["name"] and run["args"].get("epochs") != epochs:
             problems.append(f"{run['name']}: 폴더 이름은 ep{epochs}인데 args.json의 epochs는 "
                             f"{run['args'].get('epochs')}입니다 — 다른 주차 결과가 섞였을 수 있습니다")
     if problems:
@@ -841,124 +891,28 @@ def save_table(df, path):
 
 
 # =====================================================================
-# 6. 3주차 재현 확인
-# =====================================================================
-def verify_week3():
-    """
-    3주차를 이 스크립트로 다시 계산해 기존 results/week3_summary.csv, figures/week3/*.png와 같은지 확인한다.
-    아무 파일도 쓰지 않는다 (그림은 임시 폴더에 그려서 비교).
-    종료 코드: 0 = 모두 같음, 1 = 정확도 등 학습 결과 열이 다름, 2 = 소요 시간 열만 다름.
-    클래스별 표(week3_per_class_val_acc.csv)는 evaluate.py·체크포인트가 필요해 이 확인에 포함하지 않는다.
-    """
-    cfg, paths = WEEK_CONFIGS[3], week_paths(3)
-    ok, time_mismatch = True, False
-    print("[3주차 재현 확인] 3주차 설정(ep20 x 6모델)으로 다시 계산합니다. 파일은 쓰지 않습니다.")
-    runs, _ = load_runs(cfg["models"], cfg["epochs"])
-    summary = summarize(per_run_metrics(runs))
-    new = summary.round(4)
-
-    if not paths["summary"].exists():
-        print(f"[오류] 비교할 기존 파일이 없습니다: {paths['summary']}")
-        return 1
-    old = pd.read_csv(paths["summary"], encoding="utf-8-sig")
-    if list(old.columns) != list(new.columns):
-        print(f"[불일치] 열이 다릅니다.\n  기존: {list(old.columns)}\n  재계산: {list(new.columns)}")
-        ok = False
-    elif list(old["model"]) != list(new["model"]):
-        print(f"[불일치] 모델 순서가 다릅니다. 기존 {list(old['model'])} / 재계산 {list(new['model'])}")
-        ok = False
-    else:
-        max_diff, bad_cols = {}, []
-        for col in old.columns:
-            if pd.api.types.is_numeric_dtype(old[col]):
-                diff = float(np.nanmax(np.abs(old[col].to_numpy(float) - new[col].to_numpy(float)))) if len(old) else 0.0
-                max_diff[col] = diff
-                if diff > 1e-9:
-                    bad_cols.append(col)
-            elif not (old[col].astype(str) == new[col].astype(str)).all():
-                bad_cols.append(col)
-        # 정확도·epoch·파라미터 열과 소요 시간 열을 나눠 보고한다: 시간은 실행 환경에 따라 달라지는 값이라
-        # 학습 결과(정확도)가 같은지와 구분해서 알려 줘야 한다.
-        time_cols = [c for c in bad_cols if c.startswith("epoch_time_sec")]
-        other_cols = [c for c in bad_cols if c not in time_cols]
-        n_other = len(old.columns) - len([c for c in old.columns if c.startswith("epoch_time_sec")])
-        if other_cols:
-            print(f"[불일치] 정확도·epoch·파라미터 열이 다릅니다: {other_cols}")
-            ok = False
-        else:
-            print(f"[일치] week3_summary.csv 정확도·epoch·파라미터 등 {n_other}개 열: {len(old)}개 모델 모두 같습니다.")
-        if time_cols:
-            worst = max(max_diff[c] for c in time_cols)
-            print(f"[불일치] 소요 시간 열 {time_cols}: 최대 {worst:.2f}초 차이. 현재 history.csv의 epoch_time_sec가 "
-                  "week3_summary.csv를 만들 때와 다릅니다 (정확도·손실 값과는 무관).")
-            time_mismatch = True
-
-    # 그림: 임시 폴더에 다시 그려 기존 PNG와 픽셀 단위로 비교 (정보용. matplotlib 버전/폰트가 다르면 조금 다를 수 있음)
-    import matplotlib.image as mpimg
-    per_run = per_run_metrics(runs)
-    order = list(summary["model"])
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp = Path(tmp)
-        plot_val_acc_curves(runs, order, tmp / "1_val_acc_curves.png", cfg["epochs"])
-        plot_loss_curves(runs, order, tmp / "2_loss_curves.png")
-        plot_best_acc_bar(summary, per_run, tmp / "3_best_val_acc_bar.png")
-        plot_params_vs_acc(summary, tmp / "4_params_vs_acc.png", legacy_layout=True)
-        for png in sorted(tmp.glob("*.png")):
-            old_png = paths["fig_dir"] / png.name
-            if not old_png.exists():
-                print(f"[정보] 기존 그림이 없어 비교하지 않음: {old_png.name}")
-                continue
-            a, b = mpimg.imread(png), mpimg.imread(old_png)
-            if a.shape != b.shape:
-                print(f"[정보] {png.name}: 크기가 다릅니다 {a.shape} vs {b.shape}")
-            else:
-                d = float(np.abs(a.astype(float) - b.astype(float)).max())
-                print(f"[{'일치' if d == 0 else '정보'}] {png.name}: 픽셀 최대 차이 {d:.4g}"
-                      + ("" if d == 0 else " (matplotlib 버전·폰트 차이일 수 있음)"))
-    if not ok:
-        print("[결과] 정확도 등 학습 결과 열이 기존 week3_summary.csv와 다릅니다.")
-        return 1
-    if time_mismatch:
-        print("[결과] 학습 결과 열은 모두 같고, 소요 시간 열만 다릅니다.")
-        return 2
-    print("[결과] 3주차 요약표가 기존 파일과 모두 같습니다.")
-    return 0
-
-
-# =====================================================================
-# main
+# 6. 3·4주차 취합 (저장 경로를 받아서 저장 → --verify가 임시 폴더로 같은 코드를 실행할 수 있음)
 # =====================================================================
 def describe_runs(runs):
     return ", ".join(f"{m}x{n}" for m, n in pd.Series([r["model"] for r in runs]).value_counts().sort_index().items())
 
 
-def main():
-    args = parse_args()
-    if args.verify_week3:
-        try:
-            sys.exit(verify_week3())
-        except ResultsError as error:
-            print(f"[오류] {error}")
-            sys.exit(1)
+def describe_ignored(ignored):
+    """읽지 않은 실험을 (모델, epoch, 튜닝 여부)별로 센다. 튜닝 설정(5주차)이면 표시를 붙인다."""
+    counts = Counter((r["model"], r["args"].get("epochs"), r.get("tuned", False)) for r in ignored)
+    return ", ".join(f"{m} ep{e}{'(튜닝 설정)' if tuned else ''}x{n}" for (m, e, tuned), n in sorted(counts.items()))
 
-    week, cfg, paths = args.week, WEEK_CONFIGS[args.week], week_paths(args.week)
-    if week == 3 and paths["summary"].exists() and not args.overwrite_week3:
-        # 확정된 3주차 출력을 실수로 덮어쓰지 않도록 막는다 (파일 맨 위 '3주차 출력 보호' 참고)
-        print(f"[중단] 3주차 출력이 이미 있습니다: {paths['summary']}\n"
-              "  4주차를 취합하려면:        python compare_results.py --week 4\n"
-              "  3주차 값만 확인하려면:     python compare_results.py --verify-week3\n"
-              "  정말 3주차를 다시 만들려면: python compare_results.py --overwrite-week3")
-        sys.exit(1)
-    top_k = args.top_k if args.top_k is not None else cfg["default_top_k"]
-    try:
-        runs, ignored = load_runs(cfg["models"], cfg["epochs"])
-    except ResultsError as error:
-        print(f"[오류] {error}")
-        sys.exit(1)
+
+def run_week(week, paths, top_k, no_eval, force_eval):
+    """
+    3·4주차 취합 본체. 표와 그림을 paths에 저장한다. 결과가 섞여 있으면 ResultsError.
+    (예전 main()의 내용을 그대로 옮기고, 저장 위치만 paths로 받게 했다)
+    """
+    cfg = WEEK_CONFIGS[week]
+    runs, ignored = load_runs(cfg["models"], cfg["epochs"])
     print(f"[{week}주차] epochs={cfg['epochs']} 실험 {len(runs)}개 읽음: {describe_runs(runs)}")
     if ignored:
-        counts = Counter((r["model"], r["args"].get("epochs")) for r in ignored)
-        print("  읽지 않은 실험(다른 주차/모델): " + ", ".join(f"{m} ep{e}x{n}" for (m, e), n in sorted(counts.items())))
+        print("  읽지 않은 실험(다른 주차/모델/튜닝 설정): " + describe_ignored(ignored))
     expected = len(cfg["models"]) * 3
     if len(runs) != expected:
         print(f"[경고] 실험이 {len(runs)}개입니다 (모델 {len(cfg['models'])}개 x 시드 3개 = {expected}개가 기대값). "
@@ -1003,7 +957,7 @@ def main():
                 save_table(compare, paths["epoch_compare"])
 
     # ---- 클래스별 정확도 (evaluate.py 호출)
-    per_class, targets = collect_per_class(runs, summary, top_k, args.no_eval, args.force_eval)
+    per_class, targets = collect_per_class(runs, summary, top_k, no_eval, force_eval)
     if per_class is None:
         print("[경고] 클래스별 정확도 결과가 하나도 없어 표를 만들지 못했습니다.")
         return
@@ -1019,6 +973,392 @@ def main():
             cat_dog = cat_dog_table(table, order)
             print_table("[분석 3] cat, dog 클래스 정확도 (val, %)", cat_dog)
             save_table(cat_dog, paths["cat_dog"])
+
+
+# =====================================================================
+# 7. 3·4주차 재현 확인 (--verify)
+# =====================================================================
+def compare_csv(old_path, new_path):
+    """
+    두 CSV를 열 단위로 비교한다.
+    반환: ({열: 최대 차이}, 다른 열 목록, 문제 설명). 열 이름·행 수부터 다르면 문제 설명만 채운다.
+    숫자 열은 1e-9보다 큰 차이를 다르다고 보고, 둘 다 NaN인 칸은 같다고 본다.
+    """
+    old = pd.read_csv(old_path, encoding="utf-8-sig")
+    new = pd.read_csv(new_path, encoding="utf-8-sig")
+    if list(old.columns) != list(new.columns):
+        return None, None, f"열이 다릅니다 (기존 {list(old.columns)} / 재계산 {list(new.columns)})"
+    if len(old) != len(new):
+        return None, None, f"행 수가 다릅니다 (기존 {len(old)} / 재계산 {len(new)})"
+    worst, bad = {}, []
+    for col in old.columns:
+        if pd.api.types.is_numeric_dtype(old[col]) and pd.api.types.is_numeric_dtype(new[col]):
+            a, b = old[col].to_numpy(float), new[col].to_numpy(float)
+            if (np.isnan(a) != np.isnan(b)).any():
+                worst[col] = math.inf
+            else:
+                diff = np.where(np.isnan(a), 0.0, np.abs(a - b))
+                worst[col] = float(diff.max()) if len(diff) else 0.0
+        else:
+            worst[col] = 0.0 if (old[col].astype(str) == new[col].astype(str)).all() else math.inf
+        if worst[col] > 1e-9:
+            bad.append(col)
+    return worst, bad, None
+
+
+def verify_week(week):
+    """
+    3·4주차 출력을 임시 폴더에 다시 만들어 기존 파일과 비교한다. results/·figures/에는 아무것도 쓰지 않는다.
+    evaluate.py는 호출하지 않는다 (--no-eval과 같음, 이미 있는 val_per_class_acc.csv만 사용).
+    시간 열(epoch_time_*)은 실행 환경에 따라 달라지는 값이라 학습 결과 열과 나눠서 보고한다.
+    종료 코드: 0 = 모두 같음, 1 = 학습 결과 열이 다르거나 비교할 수 없음, 2 = 소요 시간 열만 다름.
+    """
+    import matplotlib.image as mpimg
+    real = week_paths(week)
+    print(f"[{week}주차 재현 확인] 임시 폴더에 다시 만들어 기존 출력과 비교합니다. 파일은 쓰지 않습니다.")
+    ok, time_only = True, False
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp = Path(tmp)
+        (tmp / "results").mkdir()
+        new = week_paths(week, tmp / "results", tmp / "figures")
+        log = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(log):  # 취합 과정의 긴 출력은 숨기고 비교 결과만 보여 준다
+                run_week(week, new, WEEK_CONFIGS[week]["default_top_k"], no_eval=True, force_eval=False)
+        except ResultsError as error:
+            print(f"[오류] {error}")
+            return 1
+        for key in VERIFY_TABLES[week]:
+            name = real[key].name
+            if not real[key].exists() or not new[key].exists():
+                print(f"[불일치] {name}: {'기존 파일이 없습니다' if not real[key].exists() else '다시 만들지 못했습니다'}")
+                ok = False
+                continue
+            worst, bad, problem = compare_csv(real[key], new[key])
+            if problem:
+                print(f"[불일치] {name}: {problem}")
+                ok = False
+                continue
+            time_bad = [c for c in bad if "epoch_time" in c]
+            other_bad = [c for c in bad if c not in time_bad]
+            n_other = len([c for c in worst if "epoch_time" not in c])
+            n_rows = len(pd.read_csv(real[key], encoding="utf-8-sig"))
+            if other_bad:
+                print(f"[불일치] {name}: 학습 결과 열이 다릅니다 {other_bad}")
+                ok = False
+            else:
+                print(f"[일치] {name}: 시간 열을 뺀 {n_other}개 열 × {n_rows}행 모두 같습니다.")
+            if time_bad:
+                print(f"[시간만 다름] {name}: {time_bad} 최대 {max(worst[c] for c in time_bad):.2f}초 차이 "
+                      "(정확도·손실 값과는 무관)")
+                time_only = True
+        # 그림: 픽셀 단위 비교 (matplotlib 버전·폰트가 다르면 조금 다를 수 있어 정보로만 보고)
+        for png in sorted(new["fig_dir"].glob("*.png")):
+            old_png = real["fig_dir"] / png.name
+            if not old_png.exists():
+                print(f"[정보] 기존 그림이 없어 비교하지 않음: {png.name}")
+                continue
+            a, b = mpimg.imread(png), mpimg.imread(old_png)
+            if a.shape != b.shape:
+                print(f"[정보] {png.name}: 크기가 다릅니다 {a.shape} vs {b.shape}")
+            else:
+                d = float(np.abs(a.astype(float) - b.astype(float)).max())
+                print(f"[{'일치' if d == 0 else '정보'}] {png.name}: 픽셀 최대 차이 {d:.4g}"
+                      + ("" if d == 0 else " (matplotlib 버전·폰트 차이일 수 있음)"))
+    if not ok:
+        print(f"[결과] {week}주차 출력의 학습 결과 열이 기존 파일과 다릅니다.")
+        return 1
+    if time_only:
+        print(f"[결과] {week}주차 학습 결과 열은 모두 같고, 소요 시간 열만 다릅니다.")
+        return 2
+    print(f"[결과] {week}주차 출력이 기존 파일과 모두 같습니다.")
+    return 0
+
+
+# =====================================================================
+# 8. 5주차 취합 (규칙은 week5_selection.py)
+# =====================================================================
+STAGE_COLUMNS = ["model", "stage", "lr", "scheduler", "weight_decay", "seed", "status", "source",
+                 "last5_val_acc_pct", "best_val_acc_pct", "best_epoch", "overfit_gap_pp", "epoch_time_sec",
+                 "diverged", "diff_vs_top_pp", "same_as_top", "winner", "selected", "selected_by", "run", "device"]
+# lr별 색 (Okabe-Ito), scheduler별 선 모양 → 색과 선 모양 두 가지로 6조합을 구분
+LR_COLORS = {0.1: "#D55E00", 0.05: "#E69F00", 0.01: "#0072B2"}
+SCHEDULER_STYLES = {"none": "-", "cosine": "--", "step": ":"}
+STAGE_A_YLIM_FROM_EPOCH = 5   # 그림 1의 y축 범위는 이 epoch 이후 값으로 정한다 (초반 낮은 값 때문에 차이가 안 보이는 것 방지)
+
+
+def mark_selected(rows, cfg, source):
+    """실제로 다음 단계에 쓴 설정(자동이든 직접 지정이든)을 표에 표시한다."""
+    for row in rows or []:
+        row["selected"] = cfg is not None and w5.cfg_equal((row["lr"], row["scheduler"], row["weight_decay"]), cfg)
+        row["selected_by"] = source if row["selected"] else ""
+
+
+def stage_frame(rows):
+    """행 목록 → 저장용 표. '_'로 시작하는 내부 값(그림용 history)은 뺀다."""
+    frame = pd.DataFrame([{k: v for k, v in row.items() if not k.startswith("_")} for row in rows])
+    for col in STAGE_COLUMNS:
+        if col not in frame:
+            frame[col] = np.nan
+    return frame[STAGE_COLUMNS]
+
+
+def warn_week5_devices(model, stage, rows):
+    """A·B 안에서 장치·PyTorch 버전이 섞였는지 확인한다 (README: A·B는 4주차를 학습한 PC에서 실행)."""
+    devices = {(r["device"]) for r in rows or [] if r["status"] == "완료"}
+    if len(devices) > 1:
+        print(f"[경고] {model} {stage}: 서로 다른 장치의 결과가 섞여 있습니다 {sorted(devices)}. "
+              "시드 1개 비교라 장치 차이가 결과에 섞일 수 있습니다.")
+
+
+def warn_saved_auto(saved, model, winners):
+    """run_experiments.py가 자동으로 고른 기록과 지금 결과로 고른 승자가 다르면 경고한다."""
+    for stage in ("A", "B"):
+        entry = saved.get(model, {}).get(stage)
+        current = winners[stage]
+        if entry and entry.get("source") == "자동" and current is not None \
+                and not w5.cfg_equal((float(entry["lr"]), entry["scheduler"], float(entry["weight_decay"])), current):
+            print(f"[경고] {model} {stage}: 실행 당시 자동 승자({w5.cfg_label((entry['lr'], entry['scheduler'], entry['weight_decay']))})와 "
+                  f"지금 결과로 고른 승자({w5.cfg_label(current)})가 다릅니다. 실행 뒤 결과가 바뀌었는지 확인하세요.")
+
+
+def final_row(model, winners, judge, index):
+    """모델별 최종 설정 요약 한 줄."""
+    row = {"model": model,
+           "A_winner": w5.cfg_label(winners["A"]) if winners["A"] else "", "A_source": winners["A_source"] or "",
+           "B_winner": w5.cfg_label(winners["B"]) if winners["B"] else "", "B_source": winners["B_source"] or "",
+           "judgment": winners["problem"] if judge is None else judge["judgment"]}
+    if judge is None:
+        return row
+    for side in ("tuned", "default"):
+        s = judge[side]
+        row[f"{side}_n_seeds"] = s["n_seeds"]
+        for col in ("last5_val_acc_pct", "best_val_acc_pct", "overfit_gap_pp"):
+            row[f"{side}_{col}_mean"], row[f"{side}_{col}_std"] = s[f"{col}_mean"], s[f"{col}_std"]
+        row[f"{side}_best_epochs"] = ",".join(str(e) for e in s["best_epochs"])
+    row.update(diff_pp=judge["diff_pp"], larger_seed_std_pp=judge["larger_seed_std_pp"],
+               threshold_pp=w5.DIFF_THRESHOLD_PP, improved=judge["improved"])
+    if judge["chosen"] is not None:
+        chosen = judge["chosen"]
+        row.update(final_lr=chosen[0], final_scheduler=chosen[1], final_weight_decay=chosen[2],
+                   not_converged=judge["not_converged"], d_needed=judge["d_needed"])
+        record = w5.find_run(index, model, chosen, w5.SEARCH_SEED, w5.D_EPOCHS)
+        if record is None:
+            row["d_status"] = "없음"
+        elif not record["complete"]:
+            row["d_status"] = "미완료"
+        else:
+            metrics = w5.run_metrics(record)
+            row.update(d_status="완료", d_last5_val_acc_pct=metrics["last5_val_acc_pct"], d_best_epoch=metrics["best_epoch"])
+    return row
+
+
+def print_stage(title, frame):
+    """단계 표를 읽기 좋게 출력한다."""
+    if frame.empty:
+        print(f"\n{title}: 아직 결과 없음")
+        return
+    show = frame[["model", "lr", "scheduler", "weight_decay", "status", "source", "last5_val_acc_pct",
+                  "best_val_acc_pct", "overfit_gap_pp", "diff_vs_top_pp", "same_as_top", "selected"]].copy()
+    show["weight_decay"] = show["weight_decay"].map("{:g}".format)
+    print(f"\n{title}")
+    print(show.to_string(index=False, float_format=lambda v: f"{v:.2f}"))
+
+
+def plot_stage_a(rows, path):
+    """그림 1: A단계 val acc 곡선. 모델마다 칸을 나누고, 색 = lr, 선 모양 = scheduler, 굵은 선 = 선택된 설정."""
+    done = [r for r in rows if r["status"] == "완료"]
+    if not done:
+        print("[정보] A단계 완료 결과가 없어 그림 1을 그리지 않습니다.")
+        return
+    models = [m for m in w5.MODELS if any(r["model"] == m for r in done)]
+    fig, axes = plt.subplots(1, len(models), figsize=(7.5 * len(models), 5.2), layout="constrained", squeeze=False)
+    for ax, model in zip(axes[0], models):
+        values = []
+        for row in [r for r in done if r["model"] == model]:
+            h = row["_history"]
+            acc = h["val_acc"] * 100
+            selected = row.get("selected", False)
+            ax.plot(h["epoch"], acc, color=LR_COLORS.get(row["lr"], "#999999"),
+                    ls=SCHEDULER_STYLES.get(row["scheduler"], "-"), lw=2.8 if selected else 1.4,
+                    label=f"lr {row['lr']:g}, {row['scheduler']}" + (" (selected)" if selected else ""))
+            if not row.get("diverged"):
+                values.extend(acc[h["epoch"] >= STAGE_A_YLIM_FROM_EPOCH].tolist())
+        if values:
+            ax.set_ylim(min(values) - 1, max(values) + 1)
+        ax.set_title(f"{model} (seed {w5.SEARCH_SEED})")
+        ax.set_xlabel("epoch")
+        ax.set_ylabel("val acc (%)")
+        ax.grid(alpha=0.3)
+        ax.legend(loc="lower right", fontsize=9)
+    fig.suptitle("Stage A: val acc per epoch (color = lr, line style = scheduler, thick = selected)\n"
+                 f"y-axis range is set from epoch {STAGE_A_YLIM_FROM_EPOCH} on; diverged runs may be cut off",
+                 fontsize=10)
+    fig.savefig(path, dpi=FIG_DPI)
+    plt.close(fig)
+    print(f"그림 저장: {path}")
+
+
+def plot_stage_b(rows, path):
+    """그림 2: B단계 wd별 last5 막대. 1위에서 0.45%p 이내 구간을 색 띠로 표시하고 선택된 설정은 진하게."""
+    done = [r for r in rows if r["status"] == "완료"]
+    if not done:
+        print("[정보] B단계 완료 결과가 없어 그림 2를 그리지 않습니다.")
+        return
+    models = [m for m in w5.MODELS if any(r["model"] == m for r in rows)]
+    fig, axes = plt.subplots(1, len(models), figsize=(6.5 * len(models), 5), layout="constrained", squeeze=False)
+    for ax, model in zip(axes[0], models):
+        model_rows = [r for r in rows if r["model"] == model]
+        labels = [f"{r['weight_decay']:g}" + ("\n(from A)" if r["source"] == "A 결과 재사용" else "") for r in model_rows]
+        heights = [r.get("last5_val_acc_pct", np.nan) if r["status"] == "완료" else np.nan for r in model_rows]
+        colors = [MODEL_COLORS.get(model, "#0072B2") if r.get("selected") else "#BBBBBB" for r in model_rows]
+        x = np.arange(len(model_rows))
+        ax.bar(x, np.nan_to_num(heights), color=colors, width=0.6)
+        valid = [h for h in heights if not pd.isna(h)]
+        if not valid:  # 이 모델은 B 결과가 아직 하나도 없음
+            ax.set_title(f"{model}: no stage B results yet")
+            ax.axis("off")
+            continue
+        top = max(valid)
+        ax.axhspan(top - w5.DIFF_THRESHOLD_PP, top, color="#009E73", alpha=0.15,
+                   label=f"within {w5.DIFF_THRESHOLD_PP}%p of best")
+        for i, h in enumerate(heights):
+            ax.text(i, (h if not pd.isna(h) else min(valid)) + 0.05, "n/a" if pd.isna(h) else f"{h:.2f}",
+                    ha="center", va="bottom", fontsize=9)
+        base = model_rows[0]
+        ax.set_xticks(x, labels)
+        ax.set_ylim(min(valid) - 1.5, top + 1)
+        ax.set_xlabel("weight decay")
+        ax.set_ylabel("last5 val acc (%)")
+        ax.set_title(f"{model}: lr {base['lr']:g} + {base['scheduler']} (seed {w5.SEARCH_SEED})")
+        ax.grid(axis="y", alpha=0.3)
+        ax.legend(loc="lower right", fontsize=9)
+    fig.suptitle("Stage B: last5 val acc by weight decay (dark bar = selected, y-axis does not start at 0)", fontsize=10)
+    fig.savefig(path, dpi=FIG_DPI)
+    plt.close(fig)
+    print(f"그림 저장: {path}")
+
+
+def plot_final(judges, path):
+    """그림 3: 모델별 4주차 기본 설정 vs 튜닝한 설정 (시드 3개 평균 ± 표준편차, 점 = 시드)."""
+    ready = [j for j in judges if j is not None and j["default"]["n_seeds"] > 0 and j["tuned"]["n_seeds"] > 0]
+    if not ready:
+        print("[정보] C단계 결과가 없어 그림 3을 그리지 않습니다.")
+        return
+    # 모델이 1개뿐이어도 제목이 잘리지 않도록 최소 폭을 둔다
+    fig, axes = plt.subplots(1, len(ready), figsize=(max(7.0, 5.5 * len(ready)), 5.3), layout="constrained", squeeze=False)
+    for ax, judge in zip(axes[0], ready):
+        same_cfg = w5.cfg_equal(judge["tuned_cfg"], w5.DEFAULT_CFG)
+        sides = [("default", "week4 default")] + ([] if same_cfg else [("tuned", "tuned")])
+        all_values = []
+        for i, (side, label) in enumerate(sides):
+            s = judge[side]
+            values = [v["last5_val_acc_pct"] for v in s["per_seed"].values()]
+            all_values += values
+            ax.bar(i, s["last5_val_acc_pct_mean"], yerr=0 if pd.isna(s["last5_val_acc_pct_std"]) else s["last5_val_acc_pct_std"],
+                   capsize=6, width=0.55, color=MODEL_COLORS.get(judge["model"], "#0072B2") if side == "tuned" else "#999999")
+            ax.scatter(np.full(len(values), i), values, color="white", edgecolor="black", s=28, zorder=3)
+            ax.text(i, max(values) + 0.15, f"{s['last5_val_acc_pct_mean']:.2f}\n(n={s['n_seeds']})", ha="center", va="bottom", fontsize=9)
+        ax.set_xticks(range(len(sides)), [label for _, label in sides])
+        ax.set_ylim(min(all_values) - 1.5, max(all_values) + 1.2)
+        if same_cfg:
+            verdict = "stage B winner = default setting"
+        elif judge["improved"] is None:
+            verdict = "stage C not finished"
+        else:
+            verdict = (f"diff {judge['diff_pp']:+.2f}%p -> "
+                       + ("improved" if judge["improved"] else "not improved, keep default"))
+        tuned_label = w5.cfg_label(judge["tuned_cfg"])
+        ax.set_title(f"{judge['model']}\ntuned: {tuned_label}\n{verdict}", fontsize=9)
+        ax.set_ylabel("last5 val acc (%)")
+        ax.grid(axis="y", alpha=0.3)
+    fig.suptitle("Stage C: tuned vs week 4 default (bar = mean ± std over seeds, dots = each seed)\n"
+                 f"improved = diff > {w5.DIFF_THRESHOLD_PP}%p and > the larger seed std; y-axis does not start at 0",
+                 fontsize=10)
+    fig.savefig(path, dpi=FIG_DPI)
+    plt.close(fig)
+    print(f"그림 저장: {path}")
+
+
+def run_week5(paths, results_dir=RESULTS_DIR):
+    """
+    5주차 취합. 단계가 덜 끝났어도 끝난 부분까지 표를 채우고, 다음 단계는 '앞 단계 미완료'로 남긴다.
+    승자는 week5_selection.resolve_winners로 고른다 (run_experiments.py와 같은 규칙, 직접 지정 기록도 반영).
+    """
+    index = w5.load_index(results_dir)
+    saved = w5.load_selection(results_dir)
+    print(f"[5주차] {', '.join(w5.MODELS)} 실험 {len(index)}개 읽음 "
+          f"(완료 {sum(r['complete'] for r in index)}개, 4주차 기본 설정 결과 포함)")
+    unfinished = [r["name"] for r in index if not r["complete"]]
+    if unfinished:
+        print("[경고] 끝나지 않은 실험 (표에서 '미완료'): " + ", ".join(unfinished))
+
+    rows_a, rows_b, finals, judges = [], [], [], []
+    for model in w5.MODELS:
+        winners = w5.resolve_winners(index, model, saved)
+        mark_selected(winners["A_rows"], winners["A"], winners["A_source"])
+        mark_selected(winners["B_rows"], winners["B"], winners["B_source"])
+        rows_a += winners["A_rows"]
+        rows_b += winners["B_rows"] or []
+        warn_week5_devices(model, "A", winners["A_rows"])
+        warn_week5_devices(model, "B", winners["B_rows"])
+        warn_saved_auto(saved, model, winners)
+        judge = w5.judge_final(index, model, winners["B"]) if winners["B"] is not None else None
+        judges.append(judge)
+        finals.append(final_row(model, winners, judge, index))
+
+    # 단계가 덜 끝났어도 항상 저장한다: 예전 실행의 파일이 남아 최신 결과처럼 보이는 것을 막기 위함
+    frame_a, frame_b = stage_frame(rows_a), stage_frame(rows_b)
+    save_table(frame_a, paths["stage_a"])
+    save_table(frame_b, paths["stage_b"])
+    final = pd.DataFrame(finals)
+    save_table(final, paths["final"])
+    print_stage(f"[A] lr × scheduler (seed {w5.SEARCH_SEED}, 차이 기준 {w5.DIFF_THRESHOLD_PP}%p)", frame_a)
+    print_stage(f"[B] weight decay (A 승자 위, seed {w5.SEARCH_SEED})", frame_b)
+    print("\n[C] 모델별 최종 설정")
+    for row in finals:
+        print(f"  - {row['model']}: A 승자 {row['A_winner'] or '-'} ({row['A_source'] or '-'}) | "
+              f"B 승자 {row['B_winner'] or '-'} ({row['B_source'] or '-'})\n      → {row['judgment']}")
+        if "final_lr" in row:
+            print(f"      최종 설정: {w5.cfg_label((row['final_lr'], row['final_scheduler'], row['final_weight_decay']))} | "
+                  f"아직 수렴 안 됨: {row['not_converged']} | D 필요: {row['d_needed']} (D 결과: {row.get('d_status', '-')})")
+
+    paths["fig_dir"].mkdir(parents=True, exist_ok=True)
+    plot_stage_a(rows_a, paths["fig_dir"] / "1_stageA_val_acc_curves.png")
+    plot_stage_b(rows_b, paths["fig_dir"] / "2_stageB_wd_last5.png")
+    plot_final(judges, paths["fig_dir"] / "3_final_vs_default.png")
+
+
+# =====================================================================
+# main
+# =====================================================================
+def main():
+    args = parse_args()
+    if args.verify_week3:  # 예전 옵션 이름도 그대로 쓸 수 있게 둔다
+        args.week, args.verify = 3, True
+    if args.verify:
+        if args.week not in VERIFY_TABLES:
+            print("[오류] --verify는 --week 3, 4에서만 씁니다.")
+            sys.exit(1)
+        sys.exit(verify_week(args.week))
+
+    week, cfg, paths = args.week, WEEK_CONFIGS[args.week], week_paths(args.week)
+    if week == 3 and paths["summary"].exists() and not args.overwrite_week3:
+        # 확정된 3주차 출력을 실수로 덮어쓰지 않도록 막는다 (파일 맨 위 '3주차 출력 보호' 참고)
+        print(f"[중단] 3주차 출력이 이미 있습니다: {paths['summary']}\n"
+              "  4주차를 취합하려면:        python compare_results.py --week 4\n"
+              "  3주차 값만 확인하려면:     python compare_results.py --verify-week3\n"
+              "  정말 3주차를 다시 만들려면: python compare_results.py --overwrite-week3")
+        sys.exit(1)
+    if week == 5:
+        run_week5(paths)
+        return
+    top_k = args.top_k if args.top_k is not None else cfg["default_top_k"]
+    try:
+        run_week(week, paths, top_k, args.no_eval, args.force_eval)
+    except ResultsError as error:
+        print(f"[오류] {error}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

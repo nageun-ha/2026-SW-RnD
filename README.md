@@ -3,7 +3,8 @@
 - 1주차: 데이터 분할·전처리 고정 (모델만 바꿔가며 공정하게 비교하기 위함)
 - 2주차: Baseline CNN + 학습/검증/평가 파이프라인 + 파이프라인 검증
 - 3주차: 구조 변형 5종 (bn, dropout, deep, wide, gap) — Baseline과 한 가지씩만 다름 + 비교 실험 일괄 실행
-- 4주차: BN 고정 Deep×Wide 조합 + 큰 모델에서 Dropout·GAP 재확인, 5주차 후보 선정 (진행 중)
+- 4주차: BN 고정 Deep×Wide 조합 + 큰 모델에서 Dropout·GAP 재확인, 5주차 후보 선정
+- 5주차: 후보 2개(bn_deep_wide, bn_deep)의 하이퍼파라미터 튜닝(lr·스케줄러·weight decay) + Grad-CAM 검증 (진행 중)
 
 ## 폴더 구조
 
@@ -23,8 +24,9 @@ cifar10_cnn/
 ├── train.py           # 학습 실행 (커맨드라인 인자로 하이퍼파라미터 변경)
 ├── evaluate.py        # 클래스별 정확도 + confusion matrix
 ├── sanity_check.py    # 파이프라인 검증 4종 (overfit은 eval 모드 판정)
-├── run_experiments.py # 비교 실험 일괄 실행 (--week 3 / 4, 모델 × 시드, 완료분 건너뛰기)
-├── compare_results.py # 주차별 결과 취합 → 요약 CSV + 비교 그림 4종 (--week 4는 추가 분석 4종)
+├── run_experiments.py # 비교 실험 일괄 실행 (--week 3 / 4, --week 5 --stage A~D, 완료분 건너뛰기)
+├── compare_results.py # 주차별 결과 취합 → 요약 CSV + 비교 그림 (--week 4 추가 분석, --week 5 단계별 표, --verify)
+├── week5_selection.py # 5주차 탐색 범위와 승자 선택 규칙 (run_experiments·compare_results가 같이 사용)
 ├── gradcam.py         # Grad-CAM 클래스 (직접 구현)
 ├── visualize_gradcam.py # Grad-CAM 그림 생성 + 구현 검증 (학습 없음)
 ├── requirements.txt
@@ -33,13 +35,16 @@ cifar10_cnn/
 │   ├── *.png, *.csv   # 1주차 EDA 그림/표
 │   ├── week3/         # 3주차 비교 그림 4종 (학습 곡선, loss, 정확도 막대, 파라미터 vs 정확도)
 │   ├── week4/         # 4주차 비교 그림 4종 (같은 구성)
+│   ├── week5/         # 5주차 그림 3종 (A단계 곡선, B단계 wd 막대, 기본 설정 대비 최종 설정)
 │   └── gradcam/       # Grad-CAM 그림, 혼동행렬, 선택한 이미지 인덱스 CSV
 ├── results/
 │   ├── <실험이름>/     # 실험별 args.json, history.csv, val_*.csv/png (best.pt 포함)
 │   ├── model_summary.csv           # 모델별 파라미터 수
 │   ├── week3_summary.csv           # 3주차 모델별 요약 (시드 평균 ± 표준편차)
 │   ├── week3_per_class_val_acc.csv # 3주차 클래스별 val 정확도
-│   └── week4_*.csv                 # 4주차 요약, 2×2 효과표, 변형 비교, cat/dog, 20 vs 40 epoch, 클래스별
+│   ├── week4_*.csv                 # 4주차 요약, 2×2 효과표, 변형 비교, cat/dog, 20 vs 40 epoch, 클래스별
+│   ├── week5_*.csv                 # 5주차 단계 A·B 표, 모델별 최종 설정
+│   └── week5_selection.json        # 5주차에 실제로 쓴 승자 기록 (직접 지정한 경우 포함)
 └── data/              # CIFAR-10 원본 (자동 다운로드, 공유 불필요)
 ```
 
@@ -107,6 +112,112 @@ python visualize_gradcam.py --mode misclassified --runs <run> --pairs cat,dog au
 
 ---
 
+# 5주차: 하이퍼파라미터 튜닝
+
+4주차에서 고른 후보 2개(bn_deep_wide, bn_deep)의 학습률·스케줄러·weight decay를 조정해, 6주차 최종 모델 확정에 쓸 **모델별 최적 설정**을 정한다.
+두 모델 중 어느 것을 최종 모델로 할지는 5주차에 정하지 않고 6주차에 정한다. (상태: 기준 작성, 실험 전)
+
+## 5주차 선정 기준 (실험 전 작성)
+
+> **결과를 본 뒤에 기준을 바꾸지 않는다.** 기준에서 문제를 발견해도 이번 선정은 이 기준대로 하고, 문제점은 결과와 함께 따로 기록한다.
+
+**고정하는 것** (모든 실험 동일)
+- 데이터 분할(`splits/`), 정규화 통계, 증강(패딩 4 + 랜덤 크롭, 좌우반전): 1주차 그대로
+- 모델 구조: 4주차의 `bn_deep_wide`, `bn_deep` 파일 그대로
+- batch size 128: batch size를 바꾸면 같은 lr이라도 한 번의 업데이트 크기와 epoch당 업데이트 횟수가 달라져 lr의 의미가 함께 바뀐다. 두 값을 같이 튜닝하지 않기 위해 고정한다.
+- SGD, momentum 0.9, 40 epoch, `NUM_WORKERS=0`
+- validation만 사용한다. 테스트셋은 6주차 최종 평가 전까지 쓰지 않는다.
+
+**지표** (4주차와 같은 정의)
+- 주 지표: `last5_val_acc`, 36~40 epoch val acc의 평균. 아래의 모든 판정에 쓴다.
+- 보조 지표: `best_val_acc`, train−val 차이(마지막 epoch). 함께 보고하되 판정에는 쓰지 않는다.
+
+**차이 판정**
+- 기준값은 **0.45%p로 고정**한다. val 5,000장에서 정확도가 89% 근처일 때의 표본 오차 √(0.89 × 0.11 / 5000) ≈ 0.44%p에서 왔다. 결과를 본 뒤 다시 계산하지 않는다.
+  - 4주차 시드 표준편차(0.27~0.36%p)로 계산한 "시드 1개짜리 두 실험의 차이"가 흔들리는 폭(약 0.4~0.5%p)과도 비슷하다. 통계적 유의성 검정은 아니다.
+- 1위와의 주 지표 차이가 0.45%p 이하인 설정은 모두 "1위와 차이 없음" 그룹에 넣는다 (1위 포함).
+- 그룹에 설정이 2개 이상이면 **기본값(lr 0.01, scheduler none, wd 5e-4)에 가장 가까운 설정**을 고른다. "가깝다"는 아래 순서로 판정한다.
+  1. 기본값과 다른 항목 수가 적은 것
+  2. lr이 0.01에 가까운 것 (배수 기준: 0.05(5배)가 0.1(10배)보다 가깝다)
+  3. wd가 5e-4에 가까운 것 (배수 기준: 1e-3(2배) → 1e-4(5배) → 5e-3(10배) 순으로 가깝다)
+  4. scheduler가 none인 것
+  - 이유: 차이가 확인되지 않은 변경은 받아들이지 않는다. 바꾼 값이 적을수록 4주차 결과와 비교하기 쉽다.
+
+**탐색 순서** (한 번에 한 가지만 바꾸고, 앞 단계의 승자를 다음 단계의 기준으로 쓴다. 두 모델은 각각 따로 진행한다)
+
+| 단계 | 바꾸는 것 | 고정하는 것 | 시드 | 모델당 새 실험 |
+|---|---|---|---|---|
+| A | lr {0.1, 0.05, 0.01} × scheduler {none, cosine} = 6조합 | wd 5e-4 | 42 | 5회 (lr 0.01 + none은 4주차 seed 42 결과를 다시 씀) |
+| B | wd {1e-4, 1e-3, 5e-3} | A 승자의 lr, scheduler | 42 | 3회 (wd 5e-4는 A 결과를 다시 씀) |
+| C | 시드 1, 2 추가 | B 승자 = 모델별 최종 설정 | 1, 2 | 2회 (최종 설정이 기본값이면 4주차 결과를 다시 써서 0회) |
+| D (선택) | epoch 60 | 최종 설정 | 42 | 1회 |
+
+- **A, B 승자**: 위의 차이 판정으로 고른다.
+- **C (최종 설정 확인)**: 최종 설정의 시드 3개 평균 ± 표본 표준편차를 같은 모델의 4주차 기본 설정(시드 3개)과 비교한다.
+  평균 차이가 0.45%p보다 크고, 두 설정의 시드 표준편차 중 큰 값보다도 클 때만 "개선"으로 본다.
+  개선이 아니면 그 모델의 최종 설정은 기본값(4주차 설정)으로 둔다.
+- **D (수렴 확인, 참고용)**: C의 시드 3개 중 2개 이상에서 best epoch이 36~40이면(4주차 "아직 수렴 안 됨"과 같은 판정) 최종 설정으로 60 epoch, seed 42를 1회 돌린다.
+  선정에는 쓰지 않는다. cosine이면 T_max도 60으로 바뀌므로 "같은 설정을 더 오래 돌린 것"이 아님을 결과에 함께 적는다.
+- **발산한 실험**: loss가 NaN이 되거나 val acc가 10% 근처에 머무는 실험(예: lr 0.1)도 설정을 바꿔 다시 돌리지 않고, 결과 그대로 표에 남긴다.
+
+**실행 환경과 분담**
+- A·B는 seed 42 실험 한 개끼리 비교하고, A의 lr 0.01 + none은 4주차 결과(RTX 5060 PC에서 학습)를 다시 쓴다.
+  장치가 다르면 같은 설정·시드라도 학습 경로가 조금씩 달라지므로 **A·B는 4주차를 학습한 PC에서 실행한다.**
+- C는 시드별로 팀원이 나눠 돌려도 된다. 이때는 `args.json`의 장치·PyTorch 버전을 결과에 함께 적는다.
+- 같은 모델 안에서는 A → B → C 순서를 지켜야 하고, 두 모델은 서로 기다리지 않는다.
+- 예상 규모: 새 실험 약 20회(A 10회 + B 6회 + C 4회) × 약 13~15분 ≈ 4.5~5시간 (RTX 5060, 4주차 epoch 시간 기준)
+
+**한계 (실험 전에 미리 적어 둠)**
+- A·B는 시드 1개로 승자를 고른다. 시드 운으로 승자가 바뀔 수 있고, C는 승자 하나만 다시 확인하므로 A·B에서 떨어진 설정이 실제로는 더 좋았을 가능성이 남는다.
+- val로 고르고 val로 보고하므로 결과가 낙관적이다. 6주차 테스트셋 결과는 이보다 낮게 나올 수 있다.
+- 한 번에 하나씩 바꾸므로 lr과 wd의 상호작용을 다 보지 못한다. SGD에서 wd의 실제 효과는 lr에 비례해 커지므로, A에서 lr이 바뀌면 알맞은 wd도 달라질 수 있다. B를 A 승자 위에서 하는 것으로 일부만 반영한다.
+- `last5`는 lr을 끝까지 줄이는 cosine에 유리하다. 끝부분 lr이 거의 0이라 epoch마다의 흔들림(4주차 약 1%p)이 사라지기 때문이다. 흔들림이 줄어드는 것도 실제로 얻는 이득이라 지표는 그대로 쓴다.
+- 40 epoch 고정이라 수렴이 느린 설정에 불리하다. D는 참고용이다.
+
+## 실행과 취합
+
+단계마다 `--dry-run`으로 실행 목록과 예상 시간을 먼저 확인한다.
+
+```bash
+python run_experiments.py --week 5 --stage A --dry-run   # 모델당 5회 (lr 0.01 + none은 4주차 결과 재사용), 약 2시간 20분
+python run_experiments.py --week 5 --stage A
+python compare_results.py --week 5                        # A 표와 승자 확인 → 팀 확인 후 B로
+python run_experiments.py --week 5 --stage B              # A 결과에서 승자를 자동으로 골라 wd 3개 (모델당 3회)
+python run_experiments.py --week 5 --stage C              # B 승자의 시드 1, 2 (팀원과 나눌 때: --seeds 1 / --seeds 2)
+python run_experiments.py --week 5 --stage D              # (선택) 조건이 맞는 모델만 60 epoch 1회
+```
+- B·C·D는 앞 단계 결과로 승자를 자동으로 고른다. 앞 단계가 덜 끝났으면 그 모델은 계획하지 않고 이유를 출력한다.
+- 자동으로 고를 수 없을 때만 직접 지정한다: `--models bn_deep --lr 0.05 --scheduler cosine`(A 승자), `--weight-decay 0.001`(B 승자).
+  실제로 실행하면 쓴 승자가 `results/week5_selection.json`에 기록되고, `compare_results.py --week 5`도 같은 설정을 쓴다.
+- 4주차 결과를 다시 쓰는 조합은 결과가 없어도 새로 학습하지 않고 "학습 안 함"으로 알린다 (`git pull`로 받기).
+- `compare_results.py --week 5`는 단계가 덜 끝났어도 끝난 부분까지 표를 채운다.
+  - `results/week5_stageA.csv`, `week5_stageB.csv`: 설정별 last5, best, train−val 차이, 1위와의 차이, 차이 없음 그룹, 선택된 설정
+  - `results/week5_final.csv`: 튜닝한 설정과 4주차 기본 설정의 시드 3개 비교, 개선 판정, 최종 설정, D 필요 여부
+  - `figures/week5/`: `1_stageA_val_acc_curves.png`, `2_stageB_wd_last5.png`, `3_final_vs_default.png`
+- 3·4주차 취합은 기본 하이퍼파라미터 실험만 읽으므로 5주차 결과가 생겨도 바뀌지 않는다. `--week 3 --verify`, `--week 4 --verify`로 확인할 수 있다.
+
+## 5주차 설계 결정
+
+| 항목 | 결정 | 이유 |
+|---|---|---|
+| 스케줄러 옵션 | `train.py --scheduler {none, cosine, step}`, 기본 none | 기본값이면 4주차까지와 같은 동작. bn_deep seed 42의 epoch 1 결과가 4주차와 소수점 끝까지 같음을 확인 |
+| 스케줄러 갱신 시점 | epoch이 끝날 때마다 `step()` 한 번 | `engine.py`(학습 루프)를 고치지 않고 `train.py`에서만 처리. cosine은 T_max = 전체 epoch |
+| step 일정 | 전체 epoch의 50%, 75% 지점에서 ×0.1 (`config.py`) | 40 epoch → 21~30 epoch은 0.1배, 31~40 epoch은 0.01배. epoch 수를 바꿔도 비율이 유지됨. 이번 탐색에서는 쓰지 않음 (초안 범위가 none·cosine) |
+| 폴더 이름 | 기본값과 다른 scheduler·wd·momentum만 `_seed` 앞에 붙임 | 기존 39개 폴더 이름이 그대로 유지됨을 확인. 예전 이름에는 wd가 없어 wd만 바꾼 실험이 4주차 폴더를 "완료"로 착각하는 문제가 있었음. 5주차 설정 144개의 이름 충돌 없음 확인 |
+| history.csv `lr` 열 | 그 epoch에 쓴 lr을 맨 끝 열에 기록 | 기존 열 순서를 읽는 코드가 깨지지 않게 함. 4주차 이전 기록에는 이 열이 없음 |
+| 튜닝 범위 | lr·scheduler·wd만. batch size·momentum은 고정 | batch size는 lr의 의미를 바꾸고, momentum까지 바꾸면 실험 수가 크게 늘어남 |
+| 탐색 방식 | 한 번에 하나씩 (A → B → C) | 모든 조합(모델당 6 × 4 = 24회)보다 적은 실험으로, 각 변경의 효과를 따로 설명할 수 있음 |
+| weight decay 적용 범위 | 모든 파라미터 (BN 포함), 4주차와 같음 | 적용 범위까지 바꾸면 wd 값 외에 다른 변수가 생김 |
+| 차이 기준 | 0.45%p로 고정 | 시드 1개 실험끼리 비교하므로 4주차의 "시드 표준편차" 기준을 쓸 수 없음. val 표본 오차로 미리 정함 |
+| 승자 규칙 위치 | `week5_selection.py` 한 곳 | `run_experiments.py`(다음 단계 계획)와 `compare_results.py`(결과 표)가 서로 다른 승자를 고르는 일을 막음. torch를 쓰지 않아 취합이 가벼움 |
+| 실험 찾기 | 폴더 이름이 아니라 `args.json` 값으로 찾음 | 이름 규칙이 바뀌거나 `--run-name`을 써도 같은 설정을 정확히 찾음. scheduler가 없는 예전 기록은 none으로 봄 |
+| 재사용 실험 | 결과가 없어도 새로 학습하지 않음 | 다른 PC에서 4주차 결과 없이 돌리면 lr 0.01 + none을 그 PC에서 새로 학습해 A의 기준점이 바뀌는 것을 막음 |
+| 직접 지정 기록 | `results/week5_selection.json` | 자동 선택이 안 돼 직접 정한 승자를 취합 때도 같게 쓰기 위함. 자동 선택 기록은 나중에 결과가 바뀌었는지 확인하는 데 씀 |
+| 3·4주차 취합 | 기본 하이퍼파라미터 실험만 읽음 | 5주차 실험도 모델·epoch(40)가 같아 그대로 두면 4주차 표에 "같은 (모델, 시드) 중복"으로 섞임 |
+| `--verify` | 임시 폴더에 다시 만들어 기존 표·그림과 비교 | 코드를 고친 뒤에도 3·4주차 결과가 같은지 파일을 덮어쓰지 않고 확인 (3단계 확인: 4주차 표 6개·그림 4개 모두 같음) |
+
+---
+
 # 4주차: 2차 모델 구조 비교
 
 BN을 고정한 상태에서 Deep과 Wide의 조합 효과(2×2)를 보고, Dropout과 GAP을 큰 모델에서 다시 확인한다.
@@ -145,6 +256,7 @@ BN을 고정한 상태에서 Deep과 Wide의 조합 효과(2×2)를 보고, Drop
 python run_experiments.py --week 4 --dry-run   # 실행할 명령과 예상 시간만 출력
 python run_experiments.py --week 4             # 21개 실험 실행 (RTX 5060에서 총 4시간 38분)
 python compare_results.py --week 4             # 결과 취합 → results/week4_*.csv + figures/week4/*.png
+python compare_results.py --week 4 --verify    # 다시 계산해 기존 출력과 같은지만 확인 (파일을 쓰지 않음)
 ```
 - `compare_results.py --week 4`는 epochs=40이고 4주차 모델 7개인 실험만 읽는다. 같은 `results/`에 있는 3주차 ep20 폴더는 읽지 않고 목록만 출력한다.
 - 폴더 이름과 `args.json`의 epoch가 다르거나, 끝나지 않은 실험, 같은 (모델, 시드) 중복이 있으면 에러로 멈춘다.
