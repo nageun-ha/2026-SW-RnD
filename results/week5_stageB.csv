@@ -1,0 +1,9 @@
+﻿model,stage,lr,scheduler,weight_decay,seed,status,source,last5_val_acc_pct,best_val_acc_pct,best_epoch,overfit_gap_pp,epoch_time_sec,diverged,diff_vs_top_pp,same_as_top,winner,selected,selected_by,run,device
+bn_deep_wide,B,0.05,cosine,0.0001,42,완료,5주차 B,91.78,91.88,35,7.4933,21.8284,False,-1.092,False,False,False,,bn_deep_wide_sgd_lr0.05_bs128_ep40_aug_cosine_wd0.0001_seed42,cuda
+bn_deep_wide,B,0.05,cosine,0.0005,42,완료,A 결과 재사용,92.272,92.54,37,7.2067,21.0858,False,-0.6,False,False,False,,bn_deep_wide_sgd_lr0.05_bs128_ep40_aug_cosine_seed42,cuda
+bn_deep_wide,B,0.05,cosine,0.001,42,완료,5주차 B,92.872,93.0,39,6.3067,22.0212,False,0.0,True,True,True,자동,bn_deep_wide_sgd_lr0.05_bs128_ep40_aug_cosine_wd0.001_seed42,cuda
+bn_deep_wide,B,0.05,cosine,0.005,42,완료,5주차 B,90.908,91.82,40,4.6044,22.0577,False,-1.964,False,False,False,,bn_deep_wide_sgd_lr0.05_bs128_ep40_aug_cosine_wd0.005_seed42,cuda
+bn_deep,B,0.05,cosine,0.0001,42,완료,5주차 B,89.456,89.52,39,6.7844,20.2819,False,-1.464,False,False,False,,bn_deep_sgd_lr0.05_bs128_ep40_aug_cosine_wd0.0001_seed42,cuda
+bn_deep,B,0.05,cosine,0.0005,42,완료,A 결과 재사용,90.684,90.84,39,6.1733,19.5536,False,-0.236,True,True,True,자동,bn_deep_sgd_lr0.05_bs128_ep40_aug_cosine_seed42,cuda
+bn_deep,B,0.05,cosine,0.001,42,완료,5주차 B,90.92,91.08,40,5.4289,20.7103,False,0.0,True,False,False,,bn_deep_sgd_lr0.05_bs128_ep40_aug_cosine_wd0.001_seed42,cuda
+bn_deep,B,0.05,cosine,0.005,42,완료,5주차 B,89.036,89.8,40,3.4,20.4699,False,-1.884,False,False,False,,bn_deep_sgd_lr0.05_bs128_ep40_aug_cosine_wd0.005_seed42,cuda

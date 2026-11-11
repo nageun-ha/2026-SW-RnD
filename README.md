@@ -115,7 +115,7 @@ python visualize_gradcam.py --mode misclassified --runs <run> --pairs cat,dog au
 # 5주차: 하이퍼파라미터 튜닝
 
 4주차에서 고른 후보 2개(bn_deep_wide, bn_deep)의 학습률·스케줄러·weight decay를 조정해, 6주차 최종 모델 확정에 쓸 **모델별 최적 설정**을 정한다.
-두 모델 중 어느 것을 최종 모델로 할지는 5주차에 정하지 않고 6주차에 정한다. (상태: 기준 작성, 실험 전)
+두 모델 중 어느 것을 최종 모델로 할지는 5주차에 정하지 않고 6주차에 정한다. (상태: 튜닝 실험 A~D, Grad-CAM 검증 완료)
 
 ## 5주차 선정 기준 (실험 전 작성)
 
@@ -195,6 +195,119 @@ python run_experiments.py --week 5 --stage D              # (선택) 조건이 �
   - `results/week5_final.csv`: 튜닝한 설정과 4주차 기본 설정의 시드 3개 비교, 개선 판정, 최종 설정, D 필요 여부
   - `figures/week5/`: `1_stageA_val_acc_curves.png`, `2_stageB_wd_last5.png`, `3_final_vs_default.png`
 - 3·4주차 취합은 기본 하이퍼파라미터 실험만 읽으므로 5주차 결과가 생겨도 바뀌지 않는다. `--week 3 --verify`, `--week 4 --verify`로 확인할 수 있다.
+
+## 결과 요약
+
+새 실험 22회(A 10 + B 6 + C 4 + D 2), 모두 성공. RTX 5060 한 대에서 총 5시간 30분(A 2:25, B 1:26, C 0:57, D 0:43).
+validation 기준이며 테스트셋은 쓰지 않았다. 판정은 위 사전 기준을 그대로 적용했다 (`compare_results.py --week 5`).
+
+**모델별 최종 설정** (`results/week5_final.csv`, 시드 3개 평균 ± 표본 표준편차)
+
+| 모델 | 최종 설정 | last5 val acc (%, 주 지표) | 4주차 기본 설정 | 차이 (%p) | 판정 | best val acc (%) | train−val 차이 (%p) | 시드별 best epoch |
+|---|---|---|---|---|---|---|---|---|
+| bn_deep_wide | **lr 0.05 + cosine + wd 1e-3** | **92.71 ± 0.27** | 88.91 ± 0.27 | **+3.81** | 개선 | 92.83 ± 0.25 (기본 89.82) | 6.49 ± 0.23 (기본 7.17) | 39, 38, 39 |
+| bn_deep | **lr 0.05 + cosine + wd 5e-4** | **90.55 ± 0.19** | 87.55 ± 0.36 | **+3.00** | 개선 | 90.74 ± 0.12 (기본 88.25) | 6.21 ± 0.14 (기본 5.02) | 39, 38, 40 |
+
+- 개선 판정: 두 모델 모두 차이가 0.45%p와 두 설정의 시드 표준편차 중 큰 값(0.27, 0.36)보다 크다.
+- 두 모델 중 최종 모델은 6주차에 정한다. 이 표는 모델끼리의 비교가 아니다.
+
+**A: lr × scheduler** (`results/week5_stageA.csv`, seed 42, wd 5e-4, last5 %)
+
+| 설정 | bn_deep_wide | 1위와 차이 | bn_deep | 1위와 차이 |
+|---|---|---|---|---|
+| lr 0.1 + cosine | **92.36** | 1위 | 90.66 | −0.02 (차이 없음) |
+| lr 0.05 + cosine | 92.27 | −0.08 (차이 없음) | **90.68** | 1위 |
+| lr 0.01 + cosine | 91.73 | −0.63 | 89.58 | −1.10 |
+| lr 0.01 + none (4주차 재사용) | 88.62 | −3.74 | 87.14 | −3.54 |
+| lr 0.05 + none | 84.70 | −7.66 | 85.12 | −5.56 |
+| lr 0.1 + none | 81.22 | −11.13 | 78.58 | −12.10 |
+
+- 두 모델 모두 "차이 없음" 그룹이 lr 0.1 + cosine과 lr 0.05 + cosine이었고, 기본값에 더 가까운 **lr 0.05 + cosine**이 승자다.
+- 효과의 대부분은 스케줄러다. lr 0.01에서 cosine만 켜도 +3.1%p(bn_deep_wide), +2.4%p(bn_deep).
+- lr을 키우고 끝까지 고정(none)하면 val acc가 마지막까지 크게 흔들려 기본 설정보다 낮다 (`figures/week5/1_stageA_val_acc_curves.png`).
+
+**B: weight decay** (`results/week5_stageB.csv`, seed 42, lr 0.05 + cosine, last5 %)
+
+| wd | bn_deep_wide | train−val (%p) | bn_deep | train−val (%p) |
+|---|---|---|---|---|
+| 1e-4 | 91.78 (−1.09) | 7.49 | 89.46 (−1.46) | 6.78 |
+| 5e-4 (A 재사용) | 92.27 (−0.60) | 7.21 | 90.68 (−0.24, 차이 없음) | 6.17 |
+| 1e-3 | **92.87** (1위) | 6.31 | 90.92 (1위) | 5.43 |
+| 5e-3 | 90.91 (−1.96) | 4.60 | 89.04 (−1.88) | 3.40 |
+
+- bn_deep_wide: 2위와 0.60%p 차이라 **wd 1e-3** 단독 승자.
+- bn_deep: wd 1e-3이 1위지만 5e-4와 0.24%p 차이라 "차이 없음" → 기본값에 가까운 **wd 5e-4**가 승자.
+- wd를 키울수록 train−val 차이는 줄지만, 5e-3에서는 정확도도 함께 떨어진다.
+
+**D: 60 epoch 수렴 확인** (참고용, 선정에 쓰지 않음, seed 42)
+
+| 모델 | last5 40 → 60 epoch | best 40 → 60 epoch (best epoch) | train−val 40 → 60 |
+|---|---|---|---|
+| bn_deep_wide | 92.87 → 93.02 (+0.15) | 93.00 (39) → 93.16 (60) | 6.31 → 6.54 |
+| bn_deep | 90.68 → 91.24 (+0.56) | 90.84 (39) → 91.30 (57) | 6.17 → 7.08 |
+
+- 두 모델 모두 C에서 "아직 수렴 안 됨"(시드 2개 이상에서 best epoch 36~40)이라 D를 실행했다.
+- bn_deep_wide는 차이가 0.45%p 안이고, bn_deep은 +0.56%p로 기준보다 조금 크다. 시드 1개라 단정하지 않는다.
+- 60 epoch에서는 cosine 일정(T_max)도 60으로 바뀌므로 "같은 설정을 더 오래 학습한 것"이 아니다. 6주차 epoch 수를 정할 때 참고만 한다.
+
+**val loss** (seed 42): 4주차 기본 설정의 bn_deep_wide는 val loss가 32 epoch에 가장 낮고(0.330) 끝에서 0.377로 올랐지만,
+최종 설정은 36 epoch 0.263 → 끝 0.266으로 다시 오르지 않았다. lr이 끝에서 거의 0이 되어 후반 흔들림이 줄어든 것으로 보이며, 시드 1개 관찰이다.
+
+## 한계 (결과를 본 뒤 발견한 것 포함, 기준은 바꾸지 않음)
+
+- **C는 lr·scheduler·wd를 한꺼번에 바꾼 비교다.** 각 요소의 기여는 시드 1개인 A·B 표로만 추정할 수 있다.
+- **"아직 수렴 안 됨" 표시는 cosine에서 의미가 약하다.** 끝으로 갈수록 lr이 0에 가까워져 정확도가 마지막에 조금씩 오르므로 best epoch이 끝에 몰리는 것이 자연스럽다. 4주차 고정 lr에서 정한 판정을 그대로 쓴 결과 두 모델 모두 D 대상이 됐다.
+- **bn_deep의 wd 선택:** seed 42에서는 wd 1e-3이 0.24%p 높았지만 "차이 없음" 규칙에 따라 5e-4를 골랐다. 시드 1개 차이라 어느 쪽이 더 좋은지는 알 수 없다.
+- **train−val 차이:** bn_deep은 최종 설정에서 5.02 → 6.21%p로 늘었다. 정확도 개선이 과적합 감소를 뜻하지는 않는다.
+- 미리 적은 한계도 그대로다: A·B는 시드 1개로 골랐고, val로 고르고 val로 보고해 결과가 낙관적이며, `last5`는 cosine에 유리하다 (다만 best 기준으로도 같은 순서다).
+- epoch 시간: A의 첫 실험만 epoch당 28.8초로 느렸고 나머지는 20~23초였다. 정확도 비교에는 영향이 없다.
+
+## 그림
+
+모두 `figures/week5/` 폴더에 있다 (`python compare_results.py --week 5`로 생성).
+
+| 그림 | 경로 | 내용 |
+|---|---|---|
+| A단계 학습 곡선 | `figures/week5/1_stageA_val_acc_curves.png` | 모델별 val acc, 색 = lr, 선 모양 = scheduler, 굵은 선 = 선택된 설정 |
+| B단계 wd 비교 | `figures/week5/2_stageB_wd_last5.png` | wd별 last5 막대, 1위에서 0.45%p 이내 구간 표시 |
+| 기본 설정 대비 최종 설정 | `figures/week5/3_final_vs_default.png` | 시드 3개 평균 ± 표준편차와 시드별 점, 개선 판정 |
+
+## Grad-CAM 검증 (새 학습 없음, validation만 사용)
+
+기존 Grad-CAM 도구가 후보 모델 가중치로 정상 동작하는지만 확인했다. 본격적인 분석은 6주차에 한다.
+
+```bash
+python visualize_gradcam.py --mode check --runs <실험 이름>     # 실험마다 따로 실행 (check는 실험 1개만 받음)
+python visualize_gradcam.py --mode compare --per-class 1 \
+    --runs baseline_sgd_lr0.01_bs128_ep40_aug_seed42 bn_deep_sgd_lr0.01_bs128_ep40_aug_seed42 bn_deep_wide_sgd_lr0.01_bs128_ep40_aug_seed42
+```
+
+**`--mode check` 결과** (검증 7개, 체크포인트마다 실행)
+
+| 체크포인트 (seed 42) | 설정 | 결과 | val acc 재현 (체크포인트 = 재계산) |
+|---|---|---|---|
+| baseline (4주차) | lr 0.01 + none + wd 5e-4 | **7/7 PASS** | 83.86% |
+| bn_deep (4주차) | lr 0.01 + none + wd 5e-4 | **7/7 PASS** | 88.36% |
+| bn_deep_wide (4주차) | lr 0.01 + none + wd 5e-4 | **7/7 PASS** | 89.90% |
+| bn_deep_wide (5주차 최종 설정) | lr 0.05 + cosine + wd 1e-3 | **7/7 PASS** | 93.00% |
+| bn_deep (5주차 최종 설정) | lr 0.05 + cosine + wd 5e-4 | **7/7 PASS** | 90.84% |
+
+- 모두 CAM 전부 0인 이미지 0/5,000장, target class를 바꾸면 CAM이 달라지고(평균 절대 차이 0.17~0.22), 학습 모델과 랜덤 모델의 CAM이 다르다(0.24~0.27).
+- 자동 선택된 층은 baseline `features[7]`, bn_deep·bn_deep_wide `features[19]`이고 모두 CAM 원본 8×8이다.
+
+**`--mode compare` 그림과 6주차에 다시 쓸 이미지 목록**
+- 그림: `figures/gradcam/compare_val_baseline_sgd_lr0.01_bs128_ep40_aug_seed42_and_2_more_67b5a34f.png`
+- 이미지 목록: `figures/gradcam/compare_val_baseline_sgd_lr0.01_bs128_ep40_aug_seed42_and_2_more_67b5a34f_indices.csv`
+  (val 위치 487, 3890, 3137, 2138, 2064, 4202, 390, 3628, 1023, 490 — 클래스별 1장, `config.SEED`로 고정)
+- 6주차에 같은 이미지로 그리기: `--indices figures/gradcam/compare_val_baseline_sgd_lr0.01_bs128_ep40_aug_seed42_and_2_more_67b5a34f_indices.csv`
+
+**6주차 확인할 것** (그림에서 눈에 띈 점, 해석하지 않고 기록만 함. 클래스당 1장이라 일반화할 수 없음)
+- airplane(#487): baseline은 비행기 몸체보다 오른쪽 아래 하늘 쪽이 밝고, bn_deep·bn_deep_wide는 몸체 쪽이 밝다.
+- ship(#1023): baseline은 배 아래 물 쪽이 밝고, 두 모델은 배 위쪽이 밝다.
+- bird(#3137): 세 모델 모두 frog로 틀렸고, 히트맵이 새보다 주변 줄무늬 배경 쪽에 퍼져 있다.
+- cat(#2138)·dog(#4202): 모델마다 예측이 갈린다 (cat: bn_deep만 dog로 틀림, dog: baseline만 cat으로 틀림).
+- deer(#2064): 세 모델 모두 사슴 몸보다 아래쪽 가운데가 밝다.
+- 위 그림은 4주차 기본 설정 체크포인트다. 5주차 최종 설정 체크포인트로도 같은 이미지(`--indices`)로 그려 비교할 것.
 
 ## 5주차 설계 결정
 

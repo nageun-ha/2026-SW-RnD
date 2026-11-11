@@ -1,0 +1,30 @@
+{
+  "bn_deep_wide": {
+    "A": {
+      "lr": 0.05,
+      "scheduler": "cosine",
+      "weight_decay": 0.0005,
+      "source": "자동"
+    },
+    "B": {
+      "lr": 0.05,
+      "scheduler": "cosine",
+      "weight_decay": 0.001,
+      "source": "자동"
+    }
+  },
+  "bn_deep": {
+    "A": {
+      "lr": 0.05,
+      "scheduler": "cosine",
+      "weight_decay": 0.0005,
+      "source": "자동"
+    },
+    "B": {
+      "lr": 0.05,
+      "scheduler": "cosine",
+      "weight_decay": 0.0005,
+      "source": "자동"
+    }
+  }
+}
