@@ -1,0 +1,3 @@
+﻿model,params,final_lr,final_scheduler,final_weight_decay,n_seeds,last5_val_acc_pct_mean,last5_val_acc_pct_std,recomputed_last5_mean,recomputed_last5_std,matches_week5_final,best_val_acc_pct_mean,best_val_acc_pct_std,epoch_time_sec_mean,ref_ep60_n_seeds,ref_ep40_seed42_last5,ref_ep60_seed42_last5,ref_ep60_gain_pp,rank,diff_vs_top_pp,larger_seed_std_pp,threshold_pp,differs,selected,rule
+bn_deep_wide,2197706,0.05,cosine,0.001,3,92.7147,0.2725,92.7147,0.2725,True,92.8333,0.2548,22.4816,1,92.872,93.024,0.152,1,0.0,0.2725,0.45,True,True,차이 있음 → last5 평균이 높은 쪽
+bn_deep,814570,0.05,cosine,0.0005,3,90.5493,0.19,90.5493,0.19,True,90.74,0.1249,19.5776,1,90.684,91.236,0.552,2,-2.1654,0.2725,0.45,True,False,차이 있음 → last5 평균이 높은 쪽

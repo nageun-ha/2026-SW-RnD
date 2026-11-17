@@ -10,6 +10,14 @@
     python compare_results.py --overwrite-week3       # 3주차 출력을 정말로 다시 만들 때만 (기본은 덮어쓰기 거부)
     python compare_results.py --week 4 --verify       # 4주차를 임시 폴더에 다시 만들어 기존 출력과 같은지 확인 (파일을 쓰지 않음)
     python compare_results.py --week 5                # 5주차: 단계별 표 + 모델별 최종 설정 + 그림 3종
+    python compare_results.py --week 6                # 6주차: 최종 모델 선택 + 테스트 평가 대상 9개 (val만 사용)
+
+6주차 (규칙은 week6_selection.py, 기준은 README "6주차 최종 선정 기준 (테스트 전 작성)")
+    읽는 것: results/week5_final.csv, results/model_summary.csv, 후보 2개와 baseline의 history.csv (val)
+    쓰는 것: results/week6_selection.csv      후보별 last5 평균 ± 표준편차, 차이 판정, 선택된 모델, 60 epoch 참고값
+             results/week6_test_targets.csv   테스트할 실험 9개 (최종 모델·baseline·다른 후보 × 시드 3개)
+    테스트셋은 읽지 않는다. 두 파일은 테스트 전에 고정하는 기록이므로, 이미 있으면 덮어쓰지 않고
+    다시 계산한 값과 같은지만 확인한다 (다르면 차이를 출력하고 종료 코드 1).
 
 5주차 (규칙은 week5_selection.py, 기준은 README "5주차 선정 기준")
     읽는 것: bn_deep_wide, bn_deep 중 batch 128·SGD·momentum 0.9·증강인 실험 (4주차 기본 설정 결과 포함)
@@ -126,6 +134,7 @@ import numpy as np
 import pandas as pd
 
 import week5_selection as w5  # torch를 쓰지 않는 규칙 모듈 (run_experiments.py와 같은 승자 규칙)
+import week6_selection as w6  # 6주차 최종 모델 선택·테스트 대상 규칙 (torch를 쓰지 않음)
 
 # ---------------------------------------------------------------------
 # 설정 (config.py는 torch를 import하고 장치 검사까지 하므로, 이 스크립트는 일부러 import하지 않는다)
@@ -140,6 +149,7 @@ WEEK_CONFIGS = {
     4: {"models": ["baseline", "bn", "bn_deep", "bn_wide", "bn_deep_wide",
                    "bn_deep_wide_dropout", "bn_deep_wide_gap"], "epochs": 40, "default_top_k": None},  # None = 전체
     5: {"models": w5.MODELS, "epochs": w5.EPOCHS, "default_top_k": None},  # 5주차는 run_week5가 따로 처리
+    6: {"models": w6.CANDIDATES + [w6.BASELINE_MODEL], "epochs": w6.EPOCHS, "default_top_k": None},  # run_week6가 처리
 }
 
 # 3·4주차 실험의 하이퍼파라미터 (config.py 기본값). 5주차에 이 값을 바꾼 실험이 results/에 함께 생기므로,
@@ -167,6 +177,8 @@ def week_paths(week, results_dir=RESULTS_DIR, figures_dir=FIGURES_DIR):
         "stage_a": results_dir / f"week{week}_stageA.csv",
         "stage_b": results_dir / f"week{week}_stageB.csv",
         "final": results_dir / f"week{week}_final.csv",
+        "selection": results_dir / f"week{week}_selection.csv",
+        "test_targets": results_dir / f"week{week}_test_targets.csv",
         "fig_dir": figures_dir / f"week{week}",
     }
 
@@ -215,9 +227,10 @@ def color_of(model, _fallback={}):
 
 def parse_args():
     """커맨드라인 인자를 읽는다."""
-    parser = argparse.ArgumentParser(description="비교 결과 취합 (3주차 / 4주차 / 5주차)")
+    parser = argparse.ArgumentParser(description="비교 결과 취합 (3주차 / 4주차 / 5주차 / 6주차)")
     parser.add_argument("--week", type=int, default=3, choices=sorted(WEEK_CONFIGS),
-                        help="취합할 주차 (기본 3). 3 = ep20 × 6모델, 4 = ep40 × 7모델, 5 = 하이퍼파라미터 튜닝")
+                        help="취합할 주차 (기본 3). 3 = ep20 × 6모델, 4 = ep40 × 7모델, 5 = 하이퍼파라미터 튜닝, "
+                             "6 = 최종 모델 선택과 테스트 평가 대상 (val만 사용)")
     parser.add_argument("--verify", action="store_true",
                         help="3·4주차: 임시 폴더에 다시 만들어 기존 출력과 같은지 확인 (아무 파일도 쓰지 않음)")
     parser.add_argument("--top-k", type=int, default=None,
@@ -1330,6 +1343,66 @@ def run_week5(paths, results_dir=RESULTS_DIR):
 
 
 # =====================================================================
+# 9. 6주차 최종 모델 선택과 테스트 평가 대상 (규칙은 week6_selection.py, 테스트셋은 읽지 않음)
+# =====================================================================
+def save_or_check(frame, path):
+    """
+    테스트 전에 고정하는 표를 저장한다. 파일이 이미 있으면 덮어쓰지 않고 같은지만 확인한다.
+    반환: True = 새로 저장했거나 기존 파일과 같음, False = 기존 파일과 다름 (파일은 그대로 둠)
+    """
+    if not path.exists():
+        save_table(frame, path)
+        return True
+    with tempfile.TemporaryDirectory() as tmp:
+        new_path = Path(tmp) / path.name
+        frame.round(4).to_csv(new_path, index=False, encoding="utf-8-sig")
+        _, bad, problem = compare_csv(path, new_path)
+    if problem or bad:
+        print(f"[불일치] {path.name}: {problem or bad} — 기존 파일을 덮어쓰지 않았습니다.")
+        return False
+    print(f"[일치] {path.name}: 기존 파일과 같습니다 (덮어쓰지 않음).")
+    return True
+
+
+def run_week6(paths, results_dir=RESULTS_DIR):
+    """
+    6주차 최종 모델을 README 규칙대로 고르고, 테스트할 실험 9개를 표로 남긴다. val 결과만 읽는다.
+    종료 코드: 0 = 정상, 1 = 결과가 없거나 week5_final.csv·기존 6주차 표와 맞지 않음
+    """
+    try:
+        selection_frame, targets_frame, summary = w6.build_selection(results_dir)
+    except w6.SelectionError as error:
+        print(f"[오류] {error}")
+        return 1
+
+    print(f"[6주차] 최종 모델 선택 (5주차 최종 설정, {w6.EPOCHS} epoch, 시드 {w6.SEEDS}, last5 val acc)")
+    for _, row in selection_frame.iterrows():
+        print(f"  {row['rank']}. {row['model']:<13} {row['last5_val_acc_pct_mean']:.2f} ± {row['last5_val_acc_pct_std']:.2f}% "
+              f"| 파라미터 {row['params']:,} | {w5.cfg_label((row['final_lr'], row['final_scheduler'], row['final_weight_decay']))} "
+              f"| history.csv 재계산 {row['recomputed_last5_mean']:.4f} ± {row['recomputed_last5_std']:.4f} "
+              f"({'week5_final.csv와 같음' if row['matches_week5_final'] else '다름'})")
+    print(f"  차이 {summary['diff_pp']:.2f}%p | 큰 시드 표준편차 {summary['larger_seed_std_pp']:.2f}%p | "
+          f"기준 {w6.DIFF_THRESHOLD_PP}%p → {summary['rule']}")
+    print(f"  → 최종 모델: {summary['chosen']} (다른 후보 {summary['other']}는 참고용)")
+    print(f"\n[참고] {w6.REFERENCE_EPOCHS} epoch (선택에 쓰지 않음)")
+    for _, row in selection_frame.iterrows():
+        print(f"  {row['model']:<13} seed {w5.SEARCH_SEED}: {row['ref_ep40_seed42_last5']:.2f} → "
+              f"{row['ref_ep60_seed42_last5']:.2f} ({row['ref_ep60_gain_pp']:+.2f}%p), "
+              f"{w6.REFERENCE_EPOCHS} epoch 시드 {row['ref_ep60_n_seeds']}개")
+    print(f"\n[테스트 평가 대상] {len(targets_frame)}개 (이 외에는 테스트하지 않음)")
+    for _, row in targets_frame.iterrows():
+        print(f"  {row['role']:<24} seed {row['seed']:>2} | best epoch {row['best_epoch']:>2}, "
+              f"best val {row['best_val_acc_pct']:.2f}% | {row['run']}")
+
+    if not selection_frame["matches_week5_final"].all():
+        print("[오류] history.csv로 다시 계산한 값이 week5_final.csv와 다릅니다. 5주차 결과가 바뀌었는지 확인하세요.")
+        return 1
+    ok = save_or_check(selection_frame, paths["selection"])
+    ok = save_or_check(targets_frame, paths["test_targets"]) and ok
+    return 0 if ok else 1
+
+
+# =====================================================================
 # main
 # =====================================================================
 def main():
@@ -1353,6 +1426,8 @@ def main():
     if week == 5:
         run_week5(paths)
         return
+    if week == 6:
+        sys.exit(run_week6(paths))
     top_k = args.top_k if args.top_k is not None else cfg["default_top_k"]
     try:
         run_week(week, paths, top_k, args.no_eval, args.force_eval)

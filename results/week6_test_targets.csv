@@ -1,0 +1,10 @@
+﻿role,model,lr,scheduler,weight_decay,epochs,seed,run,best_epoch,best_val_acc_pct,last5_val_acc_pct,device
+최종 모델,bn_deep_wide,0.05,cosine,0.001,40,42,bn_deep_wide_sgd_lr0.05_bs128_ep40_aug_cosine_wd0.001_seed42,39,93.0,92.872,cuda
+최종 모델,bn_deep_wide,0.05,cosine,0.001,40,1,bn_deep_wide_sgd_lr0.05_bs128_ep40_aug_cosine_wd0.001_seed1,38,92.54,92.4,cuda
+최종 모델,bn_deep_wide,0.05,cosine,0.001,40,2,bn_deep_wide_sgd_lr0.05_bs128_ep40_aug_cosine_wd0.001_seed2,39,92.96,92.872,cuda
+비교 기준 (baseline),baseline,0.01,none,0.0005,40,42,baseline_sgd_lr0.01_bs128_ep40_aug_seed42,39,83.86,83.376,cuda
+비교 기준 (baseline),baseline,0.01,none,0.0005,40,1,baseline_sgd_lr0.01_bs128_ep40_aug_seed1,40,84.12,83.568,cuda
+비교 기준 (baseline),baseline,0.01,none,0.0005,40,2,baseline_sgd_lr0.01_bs128_ep40_aug_seed2,40,83.6,82.868,cuda
+"다른 후보 (참고용, 선택에 안 씀)",bn_deep,0.05,cosine,0.0005,40,42,bn_deep_sgd_lr0.05_bs128_ep40_aug_cosine_seed42,39,90.84,90.684,cuda
+"다른 후보 (참고용, 선택에 안 씀)",bn_deep,0.05,cosine,0.0005,40,1,bn_deep_sgd_lr0.05_bs128_ep40_aug_cosine_seed1,38,90.6,90.332,cuda
+"다른 후보 (참고용, 선택에 안 씀)",bn_deep,0.05,cosine,0.0005,40,2,bn_deep_sgd_lr0.05_bs128_ep40_aug_cosine_seed2,40,90.78,90.632,cuda
