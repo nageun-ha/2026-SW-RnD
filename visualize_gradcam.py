@@ -10,6 +10,7 @@
 
 결과: figures/gradcam/<모드>_<val|test>_<모델들>.png, 같은 이름의 _indices.csv
     (misclassified는 _confusion.png, _confusion.csv도 저장)
+    --out-dir figures/week6/gradcam 처럼 주면 그 폴더에 같은 이름으로 저장한다 (6주차 결과용).
 
 ※ 기본 데이터는 validation이다. 테스트셋은 --test를 줄 때만 쓰며 6주차 최종 평가 전용이다.
 ※ 그림 안의 글자는 영어로 쓴다. matplotlib 기본 폰트에 한글이 없어 네모로 깨지기 때문이다.
@@ -80,6 +81,9 @@ def parse_args():
                         help="features 안의 층 인덱스 (생략하면 마지막 Conv 다음 ReLU 자동 선택)")
     parser.add_argument("--pairs", nargs="+", default=DEFAULT_PAIRS, help="헷갈린 클래스 쌍, 예: cat,dog")
     parser.add_argument("--max-per-pair", type=int, default=DEFAULT_MAX_PER_PAIR)
+    parser.add_argument("--out-dir", default=None,
+                        help="그림·CSV를 저장할 폴더 (프로젝트 폴더 기준, 생략하면 figures/gradcam). "
+                             "6주차 결과는 figures/week6/gradcam에 저장해 기존 그림과 섞이지 않게 한다")
     args = parser.parse_args()
 
     if args.mode == "check":
@@ -603,7 +607,14 @@ def run_check(args, device):
 
 def main():
     """모드에 맞는 함수를 실행한다."""
+    global OUTPUT_DIR
     args = parse_args()
+    if args.out_dir is not None:
+        # 저장 위치만 바꾼다. 출력 경로를 프로젝트 기준 상대 경로로 출력하므로 프로젝트 밖은 막는다
+        out_dir = (config.PROJECT_DIR / args.out_dir).resolve()
+        if not out_dir.is_relative_to(config.PROJECT_DIR):
+            raise SystemExit(f"--out-dir는 프로젝트 폴더 안이어야 합니다: {out_dir}")
+        OUTPUT_DIR = out_dir
     set_seed()
     device = config.DEVICE
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)

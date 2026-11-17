@@ -1,0 +1,13 @@
+split,position,cifar_index,true_class,runs,pair,pred_class,confidence
+test,739,739,cat,bn_deep_wide_sgd_lr0.05_bs128_ep40_aug_cosine_wd0.001_seed42,"cat,dog",dog,0.7096912860870361
+test,8174,8174,cat,bn_deep_wide_sgd_lr0.05_bs128_ep40_aug_cosine_wd0.001_seed42,"cat,dog",dog,0.8677234649658203
+test,5229,5229,dog,bn_deep_wide_sgd_lr0.05_bs128_ep40_aug_cosine_wd0.001_seed42,"cat,dog",cat,0.9069139957427979
+test,9414,9414,dog,bn_deep_wide_sgd_lr0.05_bs128_ep40_aug_cosine_wd0.001_seed42,"cat,dog",cat,0.9874265193939209
+test,7892,7892,automobile,bn_deep_wide_sgd_lr0.05_bs128_ep40_aug_cosine_wd0.001_seed42,"automobile,truck",truck,0.9965072274208069
+test,836,836,automobile,bn_deep_wide_sgd_lr0.05_bs128_ep40_aug_cosine_wd0.001_seed42,"automobile,truck",truck,0.9590694308280945
+test,1177,1177,truck,bn_deep_wide_sgd_lr0.05_bs128_ep40_aug_cosine_wd0.001_seed42,"automobile,truck",automobile,0.9173207879066467
+test,5864,5864,truck,bn_deep_wide_sgd_lr0.05_bs128_ep40_aug_cosine_wd0.001_seed42,"automobile,truck",automobile,0.843153715133667
+test,5844,5844,airplane,bn_deep_wide_sgd_lr0.05_bs128_ep40_aug_cosine_wd0.001_seed42,"airplane,ship",ship,0.6639551520347595
+test,6361,6361,airplane,bn_deep_wide_sgd_lr0.05_bs128_ep40_aug_cosine_wd0.001_seed42,"airplane,ship",ship,0.6163371205329895
+test,5398,5398,ship,bn_deep_wide_sgd_lr0.05_bs128_ep40_aug_cosine_wd0.001_seed42,"airplane,ship",airplane,0.6736189723014832
+test,7414,7414,ship,bn_deep_wide_sgd_lr0.05_bs128_ep40_aug_cosine_wd0.001_seed42,"airplane,ship",airplane,0.6685759425163269

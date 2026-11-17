@@ -4,13 +4,13 @@
 - 2주차: Baseline CNN + 학습/검증/평가 파이프라인 + 파이프라인 검증
 - 3주차: 구조 변형 5종 (bn, dropout, deep, wide, gap) — Baseline과 한 가지씩만 다름 + 비교 실험 일괄 실행
 - 4주차: BN 고정 Deep×Wide 조합 + 큰 모델에서 Dropout·GAP 재확인, 5주차 후보 선정
-- 5주차: 후보 2개(bn_deep_wide, bn_deep)의 하이퍼파라미터 튜닝(lr·스케줄러·weight decay) + Grad-CAM 검증 (진행 중)
-- 6주차: 최종 모델 확정 + 테스트셋 평가 + Grad-CAM·오분류 분석 (진행 중: 테스트 평가 완료, Grad-CAM 분석 전)
+- 5주차: 후보 2개(bn_deep_wide, bn_deep)의 하이퍼파라미터 튜닝(lr·스케줄러·weight decay) + Grad-CAM 검증
+- 6주차: 최종 모델 확정(bn_deep_wide, test 92.14 ± 0.25%) + 테스트셋 평가 + Grad-CAM·오분류 분석
 
 # 6주차: 최종 모델 확정과 테스트 평가
 
 5주차 최종 설정 두 개 중 최종 모델을 val 결과로 정하고, 정해 둔 9개 실험만 테스트셋으로 한 번 평가한다.
-새 학습은 하지 않고 기존 `best.pt`만 쓴다. (상태: 선정 기준 작성, 테스트 평가 완료, Grad-CAM 분석 전)
+새 학습은 하지 않고 기존 `best.pt`만 쓴다. (상태: 선정 기준 작성 → 테스트 평가 → Grad-CAM 분석 완료)
 
 ## 6주차 최종 선정 기준 (테스트 전 작성)
 
@@ -73,18 +73,26 @@
 - 시드 3개라 표준편차 추정이 불안정하다.
 - 클래스 쌍은 test 결과로 고르므로, 그 쌍의 Grad-CAM·오분류 그림은 설명용이다. 이미지 몇 장에서 본 것은 "관찰"로만 적는다.
 
-## 테스트 평가 실행과 취합
+## 실행과 취합
 
 ```bash
+python compare_results.py --week 6            # (테스트 전) 최종 모델 선택 → results/week6_selection.csv, week6_test_targets.csv
 python evaluate.py --run <실험> --test        # week6_test_targets.csv의 9개 실험마다 한 번씩
 python compare_results.py --week 6            # 선택표 확인 + 테스트 결과 취합 → results/week6_test_*.csv, figures/week6/
 ```
+- 선택표 2개는 테스트 전에 고정한 기록이라, 다시 실행하면 덮어쓰지 않고 같은지만 확인한다 (다르면 종료 코드 1).
 - `evaluate.py --test`는 각 실험 폴더에 `test_per_class_acc.csv`, `test_confusion_matrix.csv`, `test_confusion_matrix.png`를 남긴다.
   9개 모두 한 번씩만 실행했다 (이미 `test_` 파일이 있으면 다시 돌리지 않음).
-- `compare_results.py --week 6`은 테스트셋을 직접 평가하지 않고 이 파일들만 읽는다. 9개 중 일부만 있으면 멈춘다.
+- `compare_results.py --week 6`은 테스트셋을 직접 평가하지 않고 이 파일들만 읽는다. test 파일이 없으면 취합하지 않고, 9개 중 일부만 있으면 멈춘다.
+  - `results/week6_test_summary.csv`: 모델별 test acc 평균 ± 표준편차(시드별 값 포함), val best, val − test, 파라미터 수, baseline 대비 차이
+  - `results/week6_test_per_class.csv`: 모델별 클래스별 test 정확도 (시드 평균 ± 표준편차)
+  - `results/week6_confused_pairs.csv`: 최종 모델 test 혼동행렬(시드 3개 합)의 클래스 쌍 45개 순위와 분석용 쌍 표시
 - 체크포인트 확인: 9개 `best.pt`로 val을 다시 계산한 정답 수가 `history.csv`의 best val acc와 모두 같고, 저장 epoch도 best epoch과 같다.
+- Grad-CAM 그림 명령은 아래 "Grad-CAM 분석"에 있다.
 
-## 테스트 결과 (기준 그대로 적용)
+## 결과 요약
+
+9개 실험을 테스트셋으로 한 번씩 평가했고, 위 기준을 그대로 적용했다. 테스트 결과를 본 뒤 바꾼 모델·설정·epoch·비교 대상은 없다.
 
 **test 정확도** (`results/week6_test_summary.csv`, 시드 3개 평균 ± 표본 표준편차, test 10,000장)
 
@@ -94,7 +102,7 @@ python compare_results.py --week 6            # 선택표 확인 + 테스트 결
 | 비교 기준 | baseline | 620,362 | 82.97 ± 0.43 | 82.98, 83.39, 82.54 | 83.86 ± 0.26 | +0.89 ± 0.17 | — |
 | 다른 후보 (참고용) | bn_deep | 814,570 | 90.12 ± 0.09 | 90.02, 90.15, 90.18 | 90.74 ± 0.12 | +0.62 ± 0.19 | +7.15 |
 
-- val − test는 1단계에 적은 "test acc − val acc"의 부호를 바꾼 값이다 (양수 = test가 낮음). 값은 같은 `best.pt`의 val acc(= best val acc)와 test acc의 차이다.
+- val − test는 선정 기준에 적은 "test acc − val acc"의 부호를 바꾼 값이다 (양수 = test가 낮음). 값은 같은 `best.pt`의 val acc(= best val acc)와 test acc의 차이다.
 - 세 모델 모두 test가 val best보다 0.6~0.9%p 낮다. 미리 적은 한계(val로 고른 최댓값이라 낙관적)와 같은 방향이다.
 - 최종 모델은 baseline보다 9.17%p 높고, 두 모델의 시드 표준편차 중 큰 값(0.43%p)보다 크다. 구조와 하이퍼파라미터가 함께 다르므로 구조 효과만의 차이로 읽지 않는다.
 - 다른 후보 bn_deep은 최종 모델보다 2.02%p 낮다. 참고용이며 선택에는 쓰지 않았다. 세 모델의 순서는 val과 test에서 같다.
@@ -119,7 +127,7 @@ python compare_results.py --week 6            # 선택표 확인 + 테스트 결
 
 **최종 모델 test confusion matrix와 분석용 클래스 쌍** (`results/week6_confused_pairs.csv`, 시드 3개의 개수 합, 클래스당 3,000장)
 
-1단계 규칙(양방향 오분류 수 상위 3쌍 + cat↔dog, automobile↔truck 항상 포함)을 그대로 적용했다.
+선정 기준의 클래스 쌍 규칙(양방향 오분류 수 상위 3쌍 + cat↔dog, automobile↔truck 항상 포함)을 그대로 적용했다.
 
 | 순위 | 쌍 | A→B | B→A | 합 | 포함 이유 |
 |---|---|---|---|---|---|
@@ -131,13 +139,134 @@ python compare_results.py --week 6            # 선택표 확인 + 테스트 결
 - 4위는 cat↔frog(131), 5위는 bird↔deer(119)로 규칙에 따라 포함하지 않는다. 3위와 4위 사이에 동점은 없다.
 - cat↔dog(412)는 2위(158)의 약 2.6배다.
 
-**그림** (`figures/week6/`, `python compare_results.py --week 6`으로 생성)
+## 그림
+
+`figures/week6/`의 3개는 `python compare_results.py --week 6`으로, `figures/week6/gradcam/`의 4개는 아래 "Grad-CAM 분석"의 명령으로 만든다.
 
 | 그림 | 경로 | 내용 |
 |---|---|---|
 | test vs val 정확도 | `figures/week6/1_test_acc_bar.png` | 모델별 val best(빗금)와 test(진한 막대), 시드 평균 ± 표준편차, 시드별 점 |
 | 클래스별 test 정확도 | `figures/week6/2_per_class_test_acc.png` | baseline vs 최종 모델, 막대 위 숫자 = 차이(%p) |
 | 최종 모델 혼동행렬 | `figures/week6/3_final_confusion_matrix.png` | 시드 3개의 개수 합 (비율 아님), 행 = 정답, 열 = 예측 |
+| Grad-CAM, val 같은 이미지 | `figures/week6/gradcam/compare_val_baseline_sgd_lr0.01_bs128_ep40_aug_seed42_and_2_more_7cc65d4b.png` | 5주차와 같은 val 10장, baseline · bn_deep · bn_deep_wide (5주차 최종 설정, seed 42) |
+| Grad-CAM, test 클래스별 | `figures/week6/gradcam/compare_test_baseline_sgd_lr0.01_bs128_ep40_aug_seed42+bn_deep_wide_sgd_lr0.05_bs128_ep40_aug_cosine_wd0.001_seed42.png` | test 클래스별 1장, baseline vs 최종 모델 |
+| Grad-CAM, 최종 모델 오분류 | `figures/week6/gradcam/misclassified_test_bn_deep_wide_sgd_lr0.05_bs128_ep40_aug_cosine_wd0.001_seed42.png` | 분석 쌍 3개 × 4장, [원본 / 예측 클래스 CAM / 정답 클래스 CAM] |
+| Grad-CAM, 같은 오분류 이미지의 baseline | `figures/week6/gradcam/misclassified_vs_baseline/compare_test_baseline_sgd_lr0.01_bs128_ep40_aug_seed42+bn_deep_wide_sgd_lr0.05_bs128_ep40_aug_cosine_wd0.001_seed42.png` | 위 12장에 baseline vs 최종 모델 |
+
+- Grad-CAM 그림마다 같은 이름의 `_indices.csv`(이미지 목록)가 있다. 오분류 그림은 `_confusion.png`, `_confusion.csv`(seed 42 test 혼동행렬)도 있다.
+
+## Grad-CAM 분석 (seed 42 체크포인트, 새 학습 없음)
+
+```bash
+# 5주차와 같은 val 이미지 10장 (4주차 체크포인트 그림과 비교)
+python visualize_gradcam.py --mode compare --out-dir figures/week6/gradcam \
+    --indices figures/gradcam/compare_val_baseline_sgd_lr0.01_bs128_ep40_aug_seed42_and_2_more_67b5a34f_indices.csv \
+    --runs baseline_sgd_lr0.01_bs128_ep40_aug_seed42 bn_deep_sgd_lr0.05_bs128_ep40_aug_cosine_seed42 \
+           bn_deep_wide_sgd_lr0.05_bs128_ep40_aug_cosine_wd0.001_seed42
+# 테스트셋: 클래스별 1장 비교, 최종 모델 오분류, 같은 오분류 이미지에 baseline
+python visualize_gradcam.py --mode compare --test --per-class 1 --out-dir figures/week6/gradcam \
+    --runs baseline_sgd_lr0.01_bs128_ep40_aug_seed42 bn_deep_wide_sgd_lr0.05_bs128_ep40_aug_cosine_wd0.001_seed42
+python visualize_gradcam.py --mode misclassified --test --pairs cat,dog automobile,truck airplane,ship \
+    --max-per-pair 4 --out-dir figures/week6/gradcam --runs bn_deep_wide_sgd_lr0.05_bs128_ep40_aug_cosine_wd0.001_seed42
+python visualize_gradcam.py --mode compare --test --out-dir figures/week6/gradcam/misclassified_vs_baseline \
+    --indices figures/week6/gradcam/misclassified_test_bn_deep_wide_sgd_lr0.05_bs128_ep40_aug_cosine_wd0.001_seed42_indices.csv \
+    --runs baseline_sgd_lr0.01_bs128_ep40_aug_seed42 bn_deep_wide_sgd_lr0.05_bs128_ep40_aug_cosine_wd0.001_seed42
+```
+- **`--max-per-pair 4`** (쌍마다 4장, 방향별 2장): 기본값 8로 그리면 24행이라 그림이 읽기 어려워 줄였다. 이미지는 `config.SEED`로 고정한 무작위 선택이다.
+- 4개 그림 모두 CAM 원본은 8×8이다 (baseline `features[7]`, bn_deep·bn_deep_wide `features[19]`). 오분류 그림의 seed 42 test 혼동행렬은 `evaluate.py --test`의 `test_confusion_matrix.csv`와 같다.
+- 표의 예측 클래스와 confidence는 모델로 다시 계산해 그림과 같음을 확인했다. "밝은 곳" 칸은 그림을 눈으로 보고 적은 것이다.
+
+**관찰 기준**: 밝은 곳이 "물체 쪽 / 배경 쪽 / 퍼짐" 중 어디인지만 눈으로 적는다. 물체 위치 라벨이 없어 정량 지표는 만들지 않았다.
+`compare` 그림의 히트맵은 **각 모델이 예측한 클래스**의 CAM이므로, 틀린 칸은 틀린 클래스의 CAM이다.
+
+### 5주차 "6주차 확인할 것" 다시 보기 (val, 같은 이미지)
+
+- 4주차 그림: `figures/gradcam/compare_val_baseline_sgd_lr0.01_bs128_ep40_aug_seed42_and_2_more_67b5a34f.png` (5주차에 그림, 4주차 기본 설정 체크포인트)
+- 5주차 최종 설정 그림: `figures/week6/gradcam/compare_val_baseline_sgd_lr0.01_bs128_ep40_aug_seed42_and_2_more_7cc65d4b.png` (+ `_indices.csv`)
+- baseline 열은 두 그림에서 같은 체크포인트라 같다 (그림도 같음을 확인). 아래 표는 bn_deep·bn_deep_wide의 변화만 적는다.
+
+| 항목 | 4주차 기본 설정에서 본 것 | 5주차 최종 설정에서 본 것 | 예측 변화 |
+|---|---|---|---|
+| airplane #487 | baseline: 오른쪽 아래 하늘(배경 쪽). bn_deep: 몸체 위쪽과 주변 하늘에 퍼짐. bn_deep_wide: 몸체 왼쪽(물체 쪽) | bn_deep: 위쪽 가장자리 하늘 등 여러 곳(배경 쪽, 퍼짐). bn_deep_wide: 몸체 가운데(물체 쪽) | 없음 (모두 airplane) |
+| ship #1023 | baseline: 배 아래 물(배경 쪽). bn_deep·bn_deep_wide: 배 위쪽(물체 쪽) | 두 모델 모두 배 위쪽~가운데(물체 쪽), 4주차와 비슷 | 없음 (모두 ship) |
+| bird #3137 | 세 모델 모두 frog로 틀림. 새보다 주변 줄무늬 배경 쪽에 퍼짐 | bn_deep: 새 몸 가운데 쪽(물체 쪽). bn_deep_wide: 새 몸을 따라 세로로 밝음(물체 쪽) | bn_deep_wide **frog → bird (정답)**, bn_deep은 frog 그대로(0.74 → 0.82) |
+| cat #2138 | bn_deep만 dog로 틀림(0.53). 세 모델 모두 고양이 몸 왼쪽~가운데(물체 쪽) | bn_deep: 고양이 몸 왼쪽 가운데(물체 쪽). bn_deep_wide: 고양이 왼쪽 아래(물체 쪽) | 없음 (bn_deep은 여전히 dog, 0.53 → 0.70) |
+| dog #4202 | baseline만 cat으로 틀림(0.46). 모두 왼쪽 위(개 머리 근처, 물체 쪽), baseline은 오른쪽 아래까지 퍼짐 | 두 모델 모두 왼쪽 위(물체 쪽), 4주차와 비슷 | 없음 (bn_deep_wide 0.94 → 1.00) |
+| deer #2064 | 세 모델 모두 사슴 몸보다 아래쪽 가운데가 밝음 | 두 모델도 아래쪽 가운데. bn_deep_wide는 밝은 영역이 좁아짐 | 없음 (모두 deer) |
+
+- 4주차와 5주차 최종 설정은 lr·scheduler·wd가 함께 다르므로, 바뀐 점을 어느 설정 때문이라고 말할 수 없다. 이미지 1장씩의 관찰이다.
+
+### 테스트셋 Grad-CAM (baseline seed 42 vs 최종 모델 seed 42)
+
+**클래스별 1장** (그림은 위 "그림" 표, 이미지 목록은 같은 이름 `_indices.csv`)
+
+| 이미지 | baseline (예측, 밝은 곳) | bn_deep_wide (예측, 밝은 곳) |
+|---|---|---|
+| airplane #885 | airplane (0.65), 몸체·날개(물체 쪽) | **ship (0.97) 틀림**, 날개 아래 가운데(물체 아래쪽) |
+| automobile #7862 | automobile (0.61), 위쪽 가장자리와 앞 범퍼 근처(퍼짐) | automobile (1.00), 차 가운데(물체 쪽) |
+| bird #6533 | bird (0.92), 아래 가장자리(배경 쪽) | bird (0.80), 새 오른쪽 옆(물체 근처) |
+| cat #4520 | cat (0.63), 고양이 위쪽과 오른쪽(물체 쪽, 퍼짐) | cat (0.96), 고양이 위쪽과 아래쪽(물체 쪽) |
+| deer #4262 | deer (1.00), 위쪽 나무(배경 쪽)와 아래쪽 | deer (1.00), 사슴 몸(물체 쪽) |
+| dog #8458 | dog (1.00), 얼굴 쪽(물체 쪽) | dog (1.00), 얼굴 쪽(물체 쪽) |
+| frog #746 | frog (0.99), 개구리 위쪽(물체 쪽) | frog (1.00), 개구리 위쪽(물체 쪽) |
+| horse #6955 | horse (1.00), 아래쪽 땅·다리 근처 | horse (1.00), 말 앞쪽 몸과 사람(물체 쪽) |
+| ship #1866 | ship (1.00), 배 아래쪽·물 경계 | ship (1.00), 배 가운데(물체 쪽) |
+| truck #851 | truck (1.00), 운전석 위쪽(물체 쪽) | truck (1.00), 앞쪽 아래(물체 쪽) |
+
+**최종 모델 오분류 12장** (분석 쌍 3개 × 4장)와 **같은 이미지의 baseline**
+
+| 이미지 | 정답 → 최종 모델 예측 | 최종 모델 예측 CAM 밝은 곳 | baseline 예측 | baseline 밝은 곳 |
+|---|---|---|---|---|
+| #739 | cat → dog (0.71) | 고양이 왼쪽 아래 배경(배경 쪽) | horse (0.55) 틀림 | 가운데~오른쪽에 퍼짐 |
+| #8174 | cat → dog (0.87) | 고양이 가슴 쪽 세로 띠(물체 쪽) | dog (0.56) 틀림 | 고양이 가슴 쪽(물체 쪽) |
+| #5229 | dog → cat (0.91) | 개 얼굴의 흰 부분(물체 쪽) | cat (0.70) 틀림 | 가장자리 여러 곳(배경 쪽, 퍼짐) |
+| #9414 | dog → cat (0.99) | 개 몸 가운데(물체 쪽) | cat (0.97) 틀림 | 오른쪽 아래 바닥(배경 쪽) |
+| #7892 | automobile → truck (1.00) | 빨간 차체 위쪽(물체 쪽) | truck (1.00) 틀림 | 오른쪽 바퀴 근처 작은 점(물체 쪽) |
+| #836 | automobile → truck (0.96) | 차와 아래쪽 넓게(퍼짐) | automobile (0.96) 맞음 | 차 아래쪽(물체 쪽) |
+| #1177 | truck → automobile (0.92) | 앞쪽 아래(물체 쪽) | automobile (0.86) 틀림 | 앞쪽 왼쪽(물체 쪽) |
+| #5864 | truck → automobile (0.84) | 왼쪽 아래와 오른쪽 위 두 곳(물체 쪽) | automobile (0.60) 틀림 | 위쪽 가운데와 아래쪽 두 곳(물체 쪽) |
+| #5844 | airplane → ship (0.66) | 비행기 몸체(물체 쪽) | airplane (0.84) 맞음 | 아래 가장자리와 위쪽(배경 쪽, 퍼짐) |
+| #6361 | airplane → ship (0.62) | 왼쪽 아래 건물(배경 쪽) | airplane (0.64) 맞음 | 비행기 바로 아래 하늘 |
+| #5398 | ship → airplane (0.67) | 가운데 넓게(퍼짐) | ship (0.98) 맞음 | 위쪽 가장자리와 왼쪽 아래(배경 쪽) |
+| #7414 | ship → airplane (0.67) | 배 몸체 가운데(물체 쪽) | airplane (0.81) 틀림 | 왼쪽 위와 아래 가운데(퍼짐) |
+
+- 최종 모델이 틀린 12장 중 baseline도 8장을 틀렸고, 그중 7장은 최종 모델과 같은 클래스로 틀렸다 (#739만 horse). 맞힌 4장 중 3장은 airplane↔ship 쌍이다.
+- 이 12장에서 최종 모델의 예측 CAM은 12장 중 8장이 물체 쪽, 2장이 배경 쪽(#739, #6361), 2장이 퍼짐(#836, #5398)으로 보였다. 물체 쪽이 밝아도 틀린 경우가 많아, 이 그림만으로는 "어디를 봤는지"와 "왜 틀렸는지"를 연결할 수 없다.
+- 이미지는 최종 모델이 틀린 것만 골랐으므로 "baseline도 틀리는 비율"로 일반화하지 않는다.
+
+## 한계 (결과를 본 뒤 정리, 기준은 바꾸지 않음)
+
+- **val과 test의 역할**: 후보 모델(4주차), 하이퍼파라미터(5주차), 최종 모델·epoch(6주차)는 모두 val로 골랐다. test는 선정 기준을 커밋한 뒤 정해 둔 9개 실험에 한 번씩만 썼고, 최종 보고에만 썼다. 테스트 결과로 다시 고른 것은 없다.
+- **val과 test 차이의 크기**: 같은 체크포인트에서 test가 val best보다 최종 모델 0.70 ± 0.11%p, baseline 0.89 ± 0.17%p, bn_deep 0.62 ± 0.19%p 낮다.
+  주 지표인 last5 val(92.71%)과 비교하면 최종 모델은 0.58%p 낮다. best val은 최댓값이라 차이의 일부는 epoch을 val로 고른 데서 온 낙관이다.
+  val(5,000장)과 test(10,000장)는 서로 다른 이미지라 표본 차이도 섞여 있고, 이 둘을 나눠 말할 수는 없다.
+- **baseline 비교**: 최종 모델과 baseline은 구조와 하이퍼파라미터가 함께 다르다 (baseline은 튜닝하지 않은 lr 0.01 + none). +9.17%p를 구조 효과만으로 읽지 않는다.
+- **시드 3개**: 표준편차 추정이 불안정하고, "시드 표준편차보다 큼"은 유의성 검정이 아니다. 60 epoch은 seed 42 하나뿐이라 테스트하지 않았다.
+- **Grad-CAM은 소수 이미지 관찰이다**: val 10장, test 클래스별 10장, 오분류 12장, 모두 seed 42 체크포인트 하나다. 일반화하지 않는다.
+- **Grad-CAM 해상도**: CAM 원본이 8×8이라 32×32로 늘려도 위치가 거칠다. 머리·다리 같은 부위 구분은 하지 않았다 ("머리 근처"는 대략적인 위치 표시).
+- **Grad-CAM 판단 방식**: 이미지마다 0~1로 정규화하므로 이미지끼리, 모델끼리 밝기로 중요도를 비교할 수 없다. "물체 쪽 / 배경 쪽"은 눈으로 본 것이고 물체 위치 라벨이 없어 정량 지표는 만들지 않았다.
+  같은 그림도 다시 보면 다르게 적을 수 있다: airplane #487의 4주차 bn_deep을 5주차에는 "몸체 쪽"으로 적었지만, 이번에는 "몸체 위쪽과 하늘에 퍼짐"으로 보았다.
+- **test로 고른 분석 대상**: 클래스 쌍과 오분류 이미지는 test 결과로 골랐으므로 설명용이다.
+
+## 6주차 설계 결정
+
+| 항목 | 결정 | 이유 |
+|---|---|---|
+| 최종 모델 선택 규칙 | 5주차 C의 차이 판정(0.45%p와 큰 시드 표준편차를 둘 다 넘음) + "차이 없음"이면 파라미터 수가 적은 쪽(4주차 절차 3) | 시드 3개 평균을 비교하는 가장 최근 기준과 같게 함 |
+| 규칙 위치 | `week6_selection.py` (torch를 쓰지 않음), `compare_results.py --week 6`이 사용 | 5주차와 같은 이유: 규칙을 한 곳에 두고 장치 검사 없이 가볍게 취합 |
+| 테스트 전 기록 | `week6_selection.csv`, `week6_test_targets.csv`를 커밋한 뒤 테스트. 다시 실행하면 덮어쓰지 않고 비교 | 테스트 결과를 본 뒤 선택이나 평가 대상이 바뀌는 것을 막음 |
+| 테스트 평가 | 기존 `evaluate.py --test`를 그대로 사용, 실험마다 한 번, `test_` 파일이 있으면 다시 돌리지 않음 | 테스트셋에 접근하는 코드를 늘리지 않고, 같은 test를 여러 번 보지 않기 위함 |
+| 테스트 결과 취합 | `compare_results.py`는 `test_` 파일만 읽고, 일부만 있으면 멈춤 | 취합 단계에서 테스트셋을 다시 평가하지 않음. 일부 시드만으로 평균을 내는 것을 막음 |
+| val 대비 test 비교 값 | 같은 `best.pt`의 val acc (= best val acc), last5가 아님 | 같은 체크포인트끼리 비교해야 차이가 체크포인트 선택과 섞이지 않음 |
+| 체크포인트 확인 | 9개 `best.pt`의 val 재계산 정답 수 = `history.csv` best | 다른 체크포인트를 평가하는 실수를 막음 |
+| test 차이 판정 | 판정 기준 없이 차이와 시드 표준편차만 보고 | 테스트 결과로 고르는 것이 없음 |
+| 클래스 쌍 규칙 | 양방향 오분류 수 상위 3쌍 + cat↔dog, automobile↔truck, 동점은 클래스 번호 순 | 테스트 전에 정해 결과를 보고 쌍을 고르는 것을 막음 |
+| 쌍 순위 표 | 45개 쌍 전체를 `week6_confused_pairs.csv`에 저장 | 포함되지 않은 쌍과 얼마나 차이 나는지 확인할 수 있음 |
+| 혼동행렬 그림 | 시드 3개의 개수 합, 제목에 "SUM of counts (not ratios)" | 클래스당 3,000장 기준임을 그림만 보고 알 수 있게 함 |
+| Grad-CAM 저장 위치 | `visualize_gradcam.py --out-dir` 추가 (생략하면 예전처럼 `figures/gradcam`) | 6주차 그림을 `figures/week6/gradcam/`에 두어 기존 그림을 덮어쓰지 않음. 기본 동작은 `--mode check` 7/7 PASS로 확인 |
+| 오분류 샘플 수 | `--max-per-pair 4` | 기본 8이면 24행이라 읽기 어려움 |
+| baseline 비교 그림 위치 | `figures/week6/gradcam/misclassified_vs_baseline/` | 같은 두 모델의 `compare_test` 그림과 이름이 같아 덮어쓰는 것을 막음 |
+| Grad-CAM 관찰 | "물체 쪽 / 배경 쪽 / 퍼짐"만 적고 정량 지표는 만들지 않음 | 물체 위치 라벨이 없고 CAM이 8×8이라 위치가 거침 |
 
 ## 폴더 구조
 
@@ -162,7 +291,7 @@ cifar10_cnn/
 ├── week5_selection.py # 5주차 탐색 범위와 승자 선택 규칙 (run_experiments·compare_results가 같이 사용)
 ├── week6_selection.py # 6주차 최종 모델 선택, 테스트 평가 대상 9개, 클래스 쌍 선택 규칙 (테스트셋을 읽지 않음)
 ├── gradcam.py         # Grad-CAM 클래스 (직접 구현)
-├── visualize_gradcam.py # Grad-CAM 그림 생성 + 구현 검증 (학습 없음)
+├── visualize_gradcam.py # Grad-CAM 그림 생성 + 구현 검증 (학습 없음, --out-dir로 저장 폴더 지정)
 ├── requirements.txt
 ├── splits/            # 분할 인덱스 + 정규화 통계 (★ 팀원과 공유)
 ├── figures/
@@ -171,9 +300,10 @@ cifar10_cnn/
 │   ├── week4/         # 4주차 비교 그림 4종 (같은 구성)
 │   ├── week5/         # 5주차 그림 3종 (A단계 곡선, B단계 wd 막대, 기본 설정 대비 최종 설정)
 │   ├── week6/         # 6주차 그림 3종 (test vs val 막대, 클래스별 test 정확도, 최종 모델 혼동행렬)
+│   │   └── gradcam/   # 6주차 Grad-CAM 그림과 이미지 목록 CSV (misclassified_vs_baseline/ 포함)
 │   └── gradcam/       # Grad-CAM 그림, 혼동행렬, 선택한 이미지 인덱스 CSV
 ├── results/
-│   ├── <실험이름>/     # 실험별 args.json, history.csv, val_*.csv/png (best.pt 포함)
+│   ├── <실험이름>/     # 실험별 args.json, history.csv, val_*.csv/png (best.pt 포함). 6주차 평가 대상 9개는 test_*.csv/png도 있음
 │   ├── model_summary.csv           # 모델별 파라미터 수
 │   ├── week3_summary.csv           # 3주차 모델별 요약 (시드 평균 ± 표준편차)
 │   ├── week3_per_class_val_acc.csv # 3주차 클래스별 val 정확도
@@ -221,6 +351,7 @@ python visualize_gradcam.py --mode misclassified --runs <run> --pairs cat,dog au
 | `--layer N` | `features[N]` 층으로 계산 (생략하면 마지막 Conv 다음 ReLU, 8×8) |
 | `--pairs cat,dog` | `misclassified`에서 볼 클래스 쌍 |
 | `--max-per-pair N` | 쌍마다 그릴 샘플 수 (기본 8, 양방향에 반씩) |
+| `--out-dir 폴더` | 저장 폴더 (프로젝트 폴더 기준, 기본 `figures/gradcam`). 6주차 결과는 `figures/week6/gradcam` |
 
 `--layer` 번호는 구조마다 다른 층을 가리킬 수 있다. 실행할 때 출력되는 층 종류와 CAM 원본 크기를 확인한다.
 
