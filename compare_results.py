@@ -16,8 +16,16 @@
     읽는 것: results/week5_final.csv, results/model_summary.csv, 후보 2개와 baseline의 history.csv (val)
     쓰는 것: results/week6_selection.csv      후보별 last5 평균 ± 표준편차, 차이 판정, 선택된 모델, 60 epoch 참고값
              results/week6_test_targets.csv   테스트할 실험 9개 (최종 모델·baseline·다른 후보 × 시드 3개)
-    테스트셋은 읽지 않는다. 두 파일은 테스트 전에 고정하는 기록이므로, 이미 있으면 덮어쓰지 않고
+    두 파일은 테스트 전에 고정하는 기록이므로, 이미 있으면 덮어쓰지 않고
     다시 계산한 값과 같은지만 확인한다 (다르면 차이를 출력하고 종료 코드 1).
+
+    테스트 결과 취합 (9개 실험 모두 evaluate.py --test를 실행한 뒤에만):
+    이 스크립트는 테스트셋을 직접 평가하지 않는다. 9개 실험 폴더의 test_per_class_acc.csv, test_confusion_matrix.csv를 읽는다.
+    test 파일이 하나도 없으면 취합하지 않고 알리기만 하며, 일부만 있으면 멈춘다.
+    쓰는 것: results/week6_test_summary.csv   모델별 test acc 평균 ± 표준편차(시드별 값 포함), val best, val − test, 파라미터 수
+             results/week6_test_per_class.csv 모델별 클래스별 test 정확도 (시드 평균 ± 표준편차)
+             results/week6_confused_pairs.csv 최종 모델 test 혼동행렬(시드 3개 합)의 클래스 쌍 45개 순위와 분석용 쌍 표시
+             figures/week6/                   1_test_acc_bar, 2_per_class_test_acc, 3_final_confusion_matrix
 
 5주차 (규칙은 week5_selection.py, 기준은 README "5주차 선정 기준")
     읽는 것: bn_deep_wide, bn_deep 중 batch 128·SGD·momentum 0.9·증강인 실험 (4주차 기본 설정 결과 포함)
@@ -62,8 +70,8 @@
     results/week4_epoch_compare.csv      [분석 4] baseline, bn의 20 epoch(3주차) vs 40 epoch(4주차)
     figures/week4/                       그림 4종 (1_val_acc_curves, 2_loss_curves, 3_best_val_acc_bar, 4_params_vs_acc)
 
-※ 테스트셋은 사용하지 않는다.
-   - history.csv(val 기준)와 val_per_class_acc.csv만 읽는다. test_* 파일은 읽지 않는다.
+※ 테스트셋은 사용하지 않는다. (6주차 테스트 결과 취합만 예외: evaluate.py --test가 남긴 test_* 파일을 읽기만 한다)
+   - 3~5주차는 history.csv(val 기준)와 val_per_class_acc.csv만 읽는다. test_* 파일은 읽지 않는다.
    - evaluate.py는 항상 --test 없이(= val 평가로) 호출한다.
 
 표의 정의 (시드 표준편차는 표본 표준편차, ddof=1, 시드 3개 기준이라 값 자체가 불안정함에 주의)
@@ -179,6 +187,9 @@ def week_paths(week, results_dir=RESULTS_DIR, figures_dir=FIGURES_DIR):
         "final": results_dir / f"week{week}_final.csv",
         "selection": results_dir / f"week{week}_selection.csv",
         "test_targets": results_dir / f"week{week}_test_targets.csv",
+        "test_summary": results_dir / f"week{week}_test_summary.csv",
+        "test_per_class": results_dir / f"week{week}_test_per_class.csv",
+        "confused_pairs": results_dir / f"week{week}_confused_pairs.csv",
         "fig_dir": figures_dir / f"week{week}",
     }
 
@@ -1399,7 +1410,223 @@ def run_week6(paths, results_dir=RESULTS_DIR):
         return 1
     ok = save_or_check(selection_frame, paths["selection"])
     ok = save_or_check(targets_frame, paths["test_targets"]) and ok
-    return 0 if ok else 1
+    if not ok:
+        return 1
+    return run_week6_test(paths, targets_frame, selection_frame, results_dir)
+
+
+TEST_PER_CLASS_TOTAL = 1000       # test는 클래스당 1,000장 (val 500장 파일이 섞이지 않았는지 확인)
+WEEK6_ROLE_ORDER = [w6.ROLE_BASELINE, w6.ROLE_FINAL, w6.ROLE_OTHER]  # 표·그림 순서: 기준 → 최종 → 참고
+WEEK6_ROLE_SHORT = {w6.ROLE_BASELINE: "baseline", w6.ROLE_FINAL: "final", w6.ROLE_OTHER: "other candidate (ref.)"}
+BASELINE_BAR_COLOR = "#999999"    # 2번 그림에서 baseline 막대 (검정 막대는 오차 막대가 안 보여 회색 사용)
+
+
+def load_test_results(targets_frame, results_dir=RESULTS_DIR):
+    """
+    9개 실험의 evaluate.py --test 결과를 읽는다.
+    반환: 실험 이름 → {"per_class": DataFrame, "cm": DataFrame}. test 파일이 하나도 없으면 None.
+    일부 실험만 있거나 클래스·장 수가 맞지 않으면 ResultsError.
+    """
+    files = ("test_per_class_acc.csv", "test_confusion_matrix.csv")
+    have = {run: all((Path(results_dir) / run / f).exists() for f in files) for run in targets_frame["run"]}
+    if not any(have.values()):
+        return None
+    missing = [run for run, ok in have.items() if not ok]
+    if missing:
+        raise ResultsError("test 결과가 없는 실험이 있습니다 (evaluate.py --run <실험> --test): " + ", ".join(missing))
+    out = {}
+    for run in targets_frame["run"]:
+        per_class = pd.read_csv(Path(results_dir) / run / files[0], encoding="utf-8-sig")
+        cm = pd.read_csv(Path(results_dir) / run / files[1], index_col=0, encoding="utf-8-sig")
+        if list(per_class["class"]) != w6.CLASS_NAMES or list(cm.index) != w6.CLASS_NAMES or list(cm.columns) != w6.CLASS_NAMES:
+            raise ResultsError(f"{run}: test 결과의 클래스 순서가 다릅니다.")
+        if (per_class["total"] != TEST_PER_CLASS_TOTAL).any() or not (cm.sum(axis=1) == per_class["total"].values).all() \
+                or not (np.diag(cm.values) == per_class["correct"].values).all():
+            raise ResultsError(f"{run}: 클래스당 {TEST_PER_CLASS_TOTAL}장이 아니거나 혼동행렬과 클래스별 정확도가 맞지 않습니다.")
+        out[run] = {"per_class": per_class, "cm": cm}
+    return out
+
+
+def week6_test_summary(targets_frame, tests, params):
+    """모델별 test acc 평균 ± 표준편차, 같은 체크포인트의 val best, val − test 차이 (모두 시드별로 구한 뒤 평균)."""
+    rows = []
+    for role in WEEK6_ROLE_ORDER:
+        group = targets_frame[targets_frame["role"] == role]
+        test = pd.Series({r.seed: tests[r.run]["per_class"]["correct"].sum() / tests[r.run]["per_class"]["total"].sum() * 100
+                          for r in group.itertuples()})
+        val = pd.Series({r.seed: r.best_val_acc_pct for r in group.itertuples()})
+        gap = val - test  # 양수 = test가 val보다 낮음
+        row = {"role": role, "model": group["model"].iloc[0], "params": params[group["model"].iloc[0]], "n_seeds": len(group),
+               "test_acc_pct_mean": test.mean(), "test_acc_pct_std": test.std(),
+               "val_best_acc_pct_mean": val.mean(), "val_best_acc_pct_std": val.std(),
+               "val_minus_test_pp_mean": gap.mean(), "val_minus_test_pp_std": gap.std()}
+        for seed in w6.SEEDS:
+            row[f"test_acc_pct_seed{seed}"] = test[seed]
+            row[f"val_best_acc_pct_seed{seed}"] = val[seed]
+        rows.append(row)
+    summary = pd.DataFrame(rows)
+    base = summary.set_index("role").loc[w6.ROLE_BASELINE]
+    summary["test_diff_vs_baseline_pp"] = summary["test_acc_pct_mean"] - base["test_acc_pct_mean"]
+    summary["larger_seed_std_vs_baseline_pp"] = np.maximum(summary["test_acc_pct_std"], base["test_acc_pct_std"])
+    summary.loc[summary["role"] == w6.ROLE_BASELINE, ["test_diff_vs_baseline_pp", "larger_seed_std_vs_baseline_pp"]] = np.nan
+    return summary
+
+
+def week6_per_class(targets_frame, tests):
+    """클래스별 test 정확도 (시드 평균 ± 표준편차, 4주차 클래스별 표와 같은 열 이름) + 최종 모델의 baseline 대비 차이."""
+    table = pd.DataFrame({"class": w6.CLASS_NAMES})
+    models = {}
+    for role in WEEK6_ROLE_ORDER:
+        group = targets_frame[targets_frame["role"] == role]
+        model = group["model"].iloc[0]
+        models[role] = model
+        acc = pd.DataFrame({r.seed: tests[r.run]["per_class"]["accuracy"].values * 100 for r in group.itertuples()})
+        table[f"{model}_mean_pct"], table[f"{model}_std_pct"] = acc.mean(axis=1), acc.std(axis=1)
+    final, base = models[w6.ROLE_FINAL], models[w6.ROLE_BASELINE]
+    table[f"{final}_diff_vs_baseline_pp"] = table[f"{final}_mean_pct"] - table[f"{base}_mean_pct"]
+    return table, models
+
+
+def week6_final_cm(targets_frame, tests):
+    """최종 모델 test 혼동행렬의 시드 3개 합 (행 = 정답, 열 = 예측)."""
+    runs = targets_frame.loc[targets_frame["role"] == w6.ROLE_FINAL, "run"]
+    return sum(tests[run]["cm"] for run in runs)
+
+
+def week6_pairs_table(cm_sum):
+    """클래스 쌍 45개 순위 + 1단계 규칙으로 고른 분석용 쌍 표시."""
+    chosen = {(p["class_a"], p["class_b"]): p["reason"] for p in w6.select_pairs(cm_sum)}
+    rows = []
+    for pair in w6.rank_pairs(cm_sum):
+        key = (pair["class_a"], pair["class_b"])
+        rows.append({"rank": pair["rank"], "class_a": key[0], "class_b": key[1], "a_to_b": pair["a_to_b"],
+                     "b_to_a": pair["b_to_a"], "total": pair["total"],
+                     "selected": key in chosen, "reason": chosen.get(key, "")})
+    return pd.DataFrame(rows)
+
+
+def plot_week6_test_acc(summary, path):
+    """그림 1: 모델별 val best와 test 정확도 (막대 = 시드 평균 ± 표준편차, 점 = 시드별 값)."""
+    fig, ax = plt.subplots(figsize=(8.5, 5.3), layout="constrained")
+    width, all_values = 0.36, []
+    for i, row in enumerate(summary.itertuples()):
+        color = color_of(row.model)
+        for offset, split, alpha, hatch in ((-width / 2, "val_best", 0.35, "//"), (width / 2, "test", 1.0, None)):
+            values = [getattr(row, f"{split}_acc_pct_seed{s}") for s in w6.SEEDS]
+            all_values += values
+            mean, std = getattr(row, f"{split}_acc_pct_mean"), getattr(row, f"{split}_acc_pct_std")
+            ax.bar(i + offset, mean, yerr=std, capsize=5, width=width, color=color, alpha=alpha, hatch=hatch,
+                   edgecolor=color, label=None)
+            ax.scatter(np.full(len(values), i + offset), values, color="white", edgecolor="black", s=24, zorder=3)
+            # 숫자는 점과 오차 막대 중 더 높은 것 위에 둔다 (겹치지 않게)
+            ax.text(i + offset, max(max(values), mean + std) + 0.2, f"{mean:.2f}", ha="center", va="bottom", fontsize=9)
+    ax.set_xticks(range(len(summary)),
+                  [r.model + ("" if r.model == WEEK6_ROLE_SHORT[r.role] else f"\n({WEEK6_ROLE_SHORT[r.role]})")
+                   + f"\nval-test {r.val_minus_test_pp_mean:+.2f}%p" for r in summary.itertuples()])
+    ax.set_ylim(min(all_values) - 2.0, max(all_values) + 1.5)
+    ax.set_ylabel("accuracy (%)")
+    ax.grid(axis="y", alpha=0.3)
+    from matplotlib.patches import Patch
+    ax.legend(handles=[Patch(facecolor="#666666", alpha=0.35, hatch="//", label="val (best.pt epoch = best val acc, 5,000 images)"),
+                       Patch(facecolor="#666666", label="test (best.pt, 10,000 images)")],
+              loc="upper right", fontsize=9)
+    ax.set_title(f"Test vs val accuracy, {w6.EPOCHS} epochs (bar = mean ± std over seeds {w6.SEEDS}, dots = each seed)\n"
+                 "y-axis does not start at 0", fontsize=10)
+    fig.savefig(path, dpi=FIG_DPI)
+    plt.close(fig)
+    print(f"그림 저장: {path}")
+
+
+def plot_week6_per_class(per_class, models, path):
+    """그림 2: baseline vs 최종 모델의 클래스별 test 정확도 (시드 평균 ± 표준편차)."""
+    base, final = models[w6.ROLE_BASELINE], models[w6.ROLE_FINAL]
+    x = np.arange(len(per_class))
+    width = 0.38
+    fig, ax = plt.subplots(figsize=(10, 5.3), layout="constrained")
+    for offset, model, color, label in ((-width / 2, base, BASELINE_BAR_COLOR, base),
+                                        (width / 2, final, color_of(final), f"{final} (final)")):
+        ax.bar(x + offset, per_class[f"{model}_mean_pct"], yerr=per_class[f"{model}_std_pct"], capsize=4,
+               width=width, color=color, label=label)
+    for i, diff in enumerate(per_class[f"{final}_diff_vs_baseline_pp"]):
+        top = max(per_class.loc[i, f"{base}_mean_pct"] + per_class.loc[i, f"{base}_std_pct"],
+                  per_class.loc[i, f"{final}_mean_pct"] + per_class.loc[i, f"{final}_std_pct"])
+        ax.text(i, top + 0.6, f"{diff:+.1f}", ha="center", va="bottom", fontsize=9)
+    ax.set_xticks(x, per_class["class"], rotation=30, ha="right", rotation_mode="anchor")
+    low = min(per_class[f"{base}_mean_pct"] - per_class[f"{base}_std_pct"])
+    ax.set_ylim(max(0.0, low - 5.0), 100.0)
+    ax.set_ylabel("test accuracy (%)")
+    ax.grid(axis="y", alpha=0.3)
+    # 막대가 바닥부터 채워져 그림 안에는 빈 곳이 없으므로 범례는 축 아래에 둔다
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.16), ncol=2, fontsize=9)
+    ax.set_title(f"Per-class test accuracy: {base} vs {final} (mean ± std over seeds {w6.SEEDS}, 1,000 images per class)\n"
+                 "number above bars = final - baseline (%p); y-axis does not start at 0", fontsize=10)
+    fig.savefig(path, dpi=FIG_DPI)
+    plt.close(fig)
+    print(f"그림 저장: {path}")
+
+
+def plot_week6_confusion(cm_sum, model, path):
+    """그림 3: 최종 모델 test 혼동행렬, 시드 3개의 개수 합 (evaluate.py 그림과 같은 형식)."""
+    fig, ax = plt.subplots(figsize=(8, 7), layout="constrained")
+    image = ax.imshow(cm_sum.values, cmap="Blues")
+    fig.colorbar(image, ax=ax, label="number of images (sum of 3 seeds)")
+    names = list(cm_sum.columns)
+    ax.set_xticks(range(len(names)), names, rotation=45, ha="right", rotation_mode="anchor")
+    ax.set_yticks(range(len(names)), names)
+    ax.set_xlabel("predicted")
+    ax.set_ylabel("true")
+    threshold = cm_sum.values.max() / 2
+    for i in range(len(names)):
+        for j in range(len(names)):
+            value = cm_sum.values[i, j]
+            ax.text(j, i, value, ha="center", va="center", fontsize=8, color="white" if value > threshold else "black")
+    per_row = int(cm_sum.values.sum(axis=1)[0])
+    ax.set_title(f"{model} (final) test confusion matrix\n"
+                 f"SUM of counts over seeds {w6.SEEDS} (not ratios), {per_row:,} images per true class", fontsize=10)
+    fig.savefig(path, dpi=FIG_DPI)
+    plt.close(fig)
+    print(f"그림 저장: {path}")
+
+
+def run_week6_test(paths, targets_frame, selection_frame, results_dir=RESULTS_DIR):
+    """6주차 테스트 결과 취합. 테스트셋을 직접 평가하지 않고 evaluate.py --test가 남긴 파일만 읽는다."""
+    try:
+        tests = load_test_results(targets_frame, results_dir)
+    except ResultsError as error:
+        print(f"[오류] {error}")
+        return 1
+    if tests is None:
+        print("\n[테스트 결과 없음] 9개 실험 모두 evaluate.py --run <실험> --test를 실행한 뒤 다시 취합하세요.")
+        return 0
+    params = dict(zip(selection_frame["model"], selection_frame["params"]))
+    params[w6.BASELINE_MODEL] = w6.load_params(results_dir)[w6.BASELINE_MODEL]
+
+    summary = week6_test_summary(targets_frame, tests, params)
+    per_class, models = week6_per_class(targets_frame, tests)
+    cm_sum = week6_final_cm(targets_frame, tests)
+    pairs = week6_pairs_table(cm_sum)
+
+    print(f"\n[테스트 결과] {len(tests)}개 실험 (test 10,000장, 시드 {w6.SEEDS})")
+    for row in summary.itertuples():
+        seeds = ", ".join(f"{getattr(row, f'test_acc_pct_seed{s}'):.2f}" for s in w6.SEEDS)
+        diff = "" if pd.isna(row.test_diff_vs_baseline_pp) else \
+            f" | baseline 대비 {row.test_diff_vs_baseline_pp:+.2f}%p (큰 시드 표준편차 {row.larger_seed_std_vs_baseline_pp:.2f})"
+        print(f"  {row.role:<24} {row.model:<13} test {row.test_acc_pct_mean:.2f} ± {row.test_acc_pct_std:.2f}% ({seeds}) "
+              f"| val best {row.val_best_acc_pct_mean:.2f} | val − test {row.val_minus_test_pp_mean:+.2f} ± {row.val_minus_test_pp_std:.2f}%p{diff}")
+    print_table("[클래스별 test 정확도] (%, 시드 평균)", per_class)
+    print(f"\n[분석용 클래스 쌍] {models[w6.ROLE_FINAL]} test 혼동행렬 시드 3개 합, 규칙: 상위 {w6.TOP_PAIRS}쌍 + 항상 포함")
+    print(pairs.head(10).to_string(index=False))
+    for row in pairs[pairs["selected"]].itertuples():
+        print(f"  → {row.class_a}↔{row.class_b}: {row.a_to_b} + {row.b_to_a} = {row.total} (순위 {row.rank}, {row.reason})")
+
+    save_table(summary, paths["test_summary"])
+    save_table(per_class, paths["test_per_class"])
+    save_table(pairs, paths["confused_pairs"])
+    paths["fig_dir"].mkdir(parents=True, exist_ok=True)
+    plot_week6_test_acc(summary, paths["fig_dir"] / "1_test_acc_bar.png")
+    plot_week6_per_class(per_class, models, paths["fig_dir"] / "2_per_class_test_acc.png")
+    plot_week6_confusion(cm_sum, models[w6.ROLE_FINAL], paths["fig_dir"] / "3_final_confusion_matrix.png")
+    return 0
 
 
 # =====================================================================

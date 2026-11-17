@@ -5,12 +5,12 @@
 - 3주차: 구조 변형 5종 (bn, dropout, deep, wide, gap) — Baseline과 한 가지씩만 다름 + 비교 실험 일괄 실행
 - 4주차: BN 고정 Deep×Wide 조합 + 큰 모델에서 Dropout·GAP 재확인, 5주차 후보 선정
 - 5주차: 후보 2개(bn_deep_wide, bn_deep)의 하이퍼파라미터 튜닝(lr·스케줄러·weight decay) + Grad-CAM 검증 (진행 중)
-- 6주차: 최종 모델 확정 + 테스트셋 평가 + Grad-CAM·오분류 분석 (진행 중: 선정 기준 작성)
+- 6주차: 최종 모델 확정 + 테스트셋 평가 + Grad-CAM·오분류 분석 (진행 중: 테스트 평가 완료, Grad-CAM 분석 전)
 
 # 6주차: 최종 모델 확정과 테스트 평가
 
 5주차 최종 설정 두 개 중 최종 모델을 val 결과로 정하고, 정해 둔 9개 실험만 테스트셋으로 한 번 평가한다.
-새 학습은 하지 않고 기존 `best.pt`만 쓴다. (상태: 선정 기준 작성, 테스트 전)
+새 학습은 하지 않고 기존 `best.pt`만 쓴다. (상태: 선정 기준 작성, 테스트 평가 완료, Grad-CAM 분석 전)
 
 ## 6주차 최종 선정 기준 (테스트 전 작성)
 
@@ -73,6 +73,72 @@
 - 시드 3개라 표준편차 추정이 불안정하다.
 - 클래스 쌍은 test 결과로 고르므로, 그 쌍의 Grad-CAM·오분류 그림은 설명용이다. 이미지 몇 장에서 본 것은 "관찰"로만 적는다.
 
+## 테스트 평가 실행과 취합
+
+```bash
+python evaluate.py --run <실험> --test        # week6_test_targets.csv의 9개 실험마다 한 번씩
+python compare_results.py --week 6            # 선택표 확인 + 테스트 결과 취합 → results/week6_test_*.csv, figures/week6/
+```
+- `evaluate.py --test`는 각 실험 폴더에 `test_per_class_acc.csv`, `test_confusion_matrix.csv`, `test_confusion_matrix.png`를 남긴다.
+  9개 모두 한 번씩만 실행했다 (이미 `test_` 파일이 있으면 다시 돌리지 않음).
+- `compare_results.py --week 6`은 테스트셋을 직접 평가하지 않고 이 파일들만 읽는다. 9개 중 일부만 있으면 멈춘다.
+- 체크포인트 확인: 9개 `best.pt`로 val을 다시 계산한 정답 수가 `history.csv`의 best val acc와 모두 같고, 저장 epoch도 best epoch과 같다.
+
+## 테스트 결과 (기준 그대로 적용)
+
+**test 정확도** (`results/week6_test_summary.csv`, 시드 3개 평균 ± 표본 표준편차, test 10,000장)
+
+| 역할 | 모델 | 파라미터 | test acc (%) | 시드별 (42, 1, 2) | val best (%) | val − test (%p) | baseline 대비 (%p) |
+|---|---|---|---|---|---|---|---|
+| **최종 모델** | **bn_deep_wide** | 2,197,706 | **92.14 ± 0.25** | 92.38, 91.89, 92.14 | 92.83 ± 0.25 | +0.70 ± 0.11 | **+9.17** |
+| 비교 기준 | baseline | 620,362 | 82.97 ± 0.43 | 82.98, 83.39, 82.54 | 83.86 ± 0.26 | +0.89 ± 0.17 | — |
+| 다른 후보 (참고용) | bn_deep | 814,570 | 90.12 ± 0.09 | 90.02, 90.15, 90.18 | 90.74 ± 0.12 | +0.62 ± 0.19 | +7.15 |
+
+- val − test는 1단계에 적은 "test acc − val acc"의 부호를 바꾼 값이다 (양수 = test가 낮음). 값은 같은 `best.pt`의 val acc(= best val acc)와 test acc의 차이다.
+- 세 모델 모두 test가 val best보다 0.6~0.9%p 낮다. 미리 적은 한계(val로 고른 최댓값이라 낙관적)와 같은 방향이다.
+- 최종 모델은 baseline보다 9.17%p 높고, 두 모델의 시드 표준편차 중 큰 값(0.43%p)보다 크다. 구조와 하이퍼파라미터가 함께 다르므로 구조 효과만의 차이로 읽지 않는다.
+- 다른 후보 bn_deep은 최종 모델보다 2.02%p 낮다. 참고용이며 선택에는 쓰지 않았다. 세 모델의 순서는 val과 test에서 같다.
+
+**클래스별 test 정확도** (`results/week6_test_per_class.csv`, 시드 3개 평균 ± 표본 표준편차, 클래스당 1,000장)
+
+| 클래스 | baseline | bn_deep_wide (최종) | 차이 (%p) | bn_deep (참고) |
+|---|---|---|---|---|
+| airplane | 86.90 ± 2.43 | 93.00 ± 0.10 | +6.10 | 91.70 ± 0.44 |
+| automobile | 93.20 ± 2.59 | 96.63 ± 0.42 | +3.43 | 95.97 ± 0.38 |
+| bird | 79.57 ± 4.61 | 88.90 ± 0.78 | +9.33 | 85.70 ± 0.44 |
+| cat | **64.77 ± 3.16** | **83.93 ± 0.51** | **+19.17** | 79.73 ± 0.64 |
+| deer | 80.70 ± 3.08 | 93.83 ± 0.57 | +13.13 | 90.30 ± 0.40 |
+| dog | 75.07 ± 1.99 | 87.97 ± 0.55 | +12.90 | 84.47 ± 1.22 |
+| frog | 86.77 ± 6.26 | 93.77 ± 0.76 | +7.00 | 92.97 ± 0.21 |
+| horse | 85.77 ± 2.19 | 93.53 ± 0.91 | +7.77 | 92.33 ± 0.15 |
+| ship | 87.47 ± 1.59 | 95.43 ± 0.55 | +7.97 | 94.47 ± 0.57 |
+| truck | 89.50 ± 2.23 | 94.37 ± 0.55 | +4.87 | 93.53 ± 0.59 |
+
+- 두 모델 모두 cat이 가장 낮고, 최종 모델에서 향상 폭이 가장 큰 클래스도 cat(+19.17%p)이다. 최종 모델에서 다음으로 낮은 클래스는 dog(87.97%)와 bird(88.90%)다.
+- baseline은 클래스별 시드 표준편차가 1.6~6.3%p로 크다 (frog 6.26%p). 최종 모델은 0.1~0.9%p다.
+
+**최종 모델 test confusion matrix와 분석용 클래스 쌍** (`results/week6_confused_pairs.csv`, 시드 3개의 개수 합, 클래스당 3,000장)
+
+1단계 규칙(양방향 오분류 수 상위 3쌍 + cat↔dog, automobile↔truck 항상 포함)을 그대로 적용했다.
+
+| 순위 | 쌍 | A→B | B→A | 합 | 포함 이유 |
+|---|---|---|---|---|---|
+| 1 | cat ↔ dog | 215 | 197 | 412 | 상위 3쌍 + 항상 포함 |
+| 2 | automobile ↔ truck | 70 | 88 | 158 | 상위 3쌍 + 항상 포함 |
+| 3 | airplane ↔ ship | 70 | 83 | 153 | 상위 3쌍 |
+
+- **Grad-CAM·오분류 분석 쌍 확정: cat↔dog, automobile↔truck, airplane↔ship (3쌍).** 항상 포함할 두 쌍이 상위 3쌍 안에 있어 추가된 쌍은 없다.
+- 4위는 cat↔frog(131), 5위는 bird↔deer(119)로 규칙에 따라 포함하지 않는다. 3위와 4위 사이에 동점은 없다.
+- cat↔dog(412)는 2위(158)의 약 2.6배다.
+
+**그림** (`figures/week6/`, `python compare_results.py --week 6`으로 생성)
+
+| 그림 | 경로 | 내용 |
+|---|---|---|
+| test vs val 정확도 | `figures/week6/1_test_acc_bar.png` | 모델별 val best(빗금)와 test(진한 막대), 시드 평균 ± 표준편차, 시드별 점 |
+| 클래스별 test 정확도 | `figures/week6/2_per_class_test_acc.png` | baseline vs 최종 모델, 막대 위 숫자 = 차이(%p) |
+| 최종 모델 혼동행렬 | `figures/week6/3_final_confusion_matrix.png` | 시드 3개의 개수 합 (비율 아님), 행 = 정답, 열 = 예측 |
+
 ## 폴더 구조
 
 ```
@@ -104,6 +170,7 @@ cifar10_cnn/
 │   ├── week3/         # 3주차 비교 그림 4종 (학습 곡선, loss, 정확도 막대, 파라미터 vs 정확도)
 │   ├── week4/         # 4주차 비교 그림 4종 (같은 구성)
 │   ├── week5/         # 5주차 그림 3종 (A단계 곡선, B단계 wd 막대, 기본 설정 대비 최종 설정)
+│   ├── week6/         # 6주차 그림 3종 (test vs val 막대, 클래스별 test 정확도, 최종 모델 혼동행렬)
 │   └── gradcam/       # Grad-CAM 그림, 혼동행렬, 선택한 이미지 인덱스 CSV
 ├── results/
 │   ├── <실험이름>/     # 실험별 args.json, history.csv, val_*.csv/png (best.pt 포함)
@@ -113,7 +180,8 @@ cifar10_cnn/
 │   ├── week4_*.csv                 # 4주차 요약, 2×2 효과표, 변형 비교, cat/dog, 20 vs 40 epoch, 클래스별
 │   ├── week5_*.csv                 # 5주차 단계 A·B 표, 모델별 최종 설정
 │   ├── week5_selection.json        # 5주차에 실제로 쓴 승자 기록 (직접 지정한 경우 포함)
-│   └── week6_*.csv                 # 6주차 최종 모델 선택표, 테스트 평가 대상 9개 (테스트 전 고정, 이미 있으면 덮어쓰지 않음)
+│   ├── week6_selection.csv, week6_test_targets.csv  # 6주차 최종 모델 선택표, 테스트 평가 대상 9개 (테스트 전 고정, 덮어쓰지 않음)
+│   └── week6_test_*.csv, week6_confused_pairs.csv  # 6주차 test 요약, 클래스별 test 정확도, 혼동 클래스 쌍 순위
 └── data/              # CIFAR-10 원본 (자동 다운로드, 공유 불필요)
 ```
 

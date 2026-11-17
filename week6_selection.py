@@ -251,14 +251,12 @@ def build_selection(results_dir=RESULTS_DIR):
 # =====================================================================
 # Grad-CAM·오분류 분석용 클래스 쌍
 # =====================================================================
-def select_pairs(cm, class_names=None, top_k=TOP_PAIRS, always=ALWAYS_PAIRS):
+def rank_pairs(cm, class_names=None):
     """
-    혼동행렬에서 분석할 클래스 쌍을 고른다 (README "클래스 쌍 선택 규칙").
-      cm[i][j] = 정답 i를 j로 예측한 개수 (engine.confusion_matrix와 같은 방향). 시드 3개를 더한 행렬을 넘긴다.
-      1) 순서 없는 쌍 (A, B)마다 양방향 오분류 수 = cm[A][B] + cm[B][A]
-      2) 많은 순으로 top_k쌍. 동점이면 클래스 번호(CLASS_NAMES 순서)가 앞선 쌍을 먼저 둔다
-      3) always의 쌍은 순위와 상관없이 포함한다 (top_k 안에 이미 있으면 중복하지 않음)
-    반환: 고른 쌍의 dict 목록 (상위 쌍 → 항상 포함 쌍 순서). 각 dict에 전체 순위(rank)와 포함 이유를 적는다.
+    혼동행렬의 순서 없는 클래스 쌍 45개를 양방향 오분류 수가 많은 순으로 정렬한다.
+      cm[i][j] = 정답 i를 j로 예측한 개수 (engine.confusion_matrix와 같은 방향)
+      양방향 오분류 수 = cm[A][B] + cm[B][A], 동점이면 클래스 번호(CLASS_NAMES 순서)가 앞선 쌍을 먼저 둔다.
+    반환: dict 목록 (rank, class_a, class_b, a_to_b, b_to_a, total, 내부용 _order)
     """
     names = CLASS_NAMES if class_names is None else list(class_names)
     if names != CLASS_NAMES:
@@ -274,6 +272,20 @@ def select_pairs(cm, class_names=None, top_k=TOP_PAIRS, always=ALWAYS_PAIRS):
     pairs.sort(key=lambda p: (-p["total"], p["_order"]))
     for rank, pair in enumerate(pairs, start=1):
         pair["rank"] = rank
+    return pairs
+
+
+def select_pairs(cm, class_names=None, top_k=TOP_PAIRS, always=ALWAYS_PAIRS):
+    """
+    혼동행렬에서 분석할 클래스 쌍을 고른다 (README "클래스 쌍 선택 규칙").
+      cm은 시드 3개를 더한 행렬을 넘긴다 (방향은 rank_pairs 참고).
+      1) 순서 없는 쌍 (A, B)마다 양방향 오분류 수 = cm[A][B] + cm[B][A]
+      2) 많은 순으로 top_k쌍. 동점이면 클래스 번호(CLASS_NAMES 순서)가 앞선 쌍을 먼저 둔다
+      3) always의 쌍은 순위와 상관없이 포함한다 (top_k 안에 이미 있으면 중복하지 않음)
+    반환: 고른 쌍의 dict 목록 (상위 쌍 → 항상 포함 쌍 순서). 각 dict에 전체 순위(rank)와 포함 이유를 적는다.
+    """
+    names = CLASS_NAMES if class_names is None else list(class_names)
+    pairs = rank_pairs(cm, names)
 
     always_keys = {frozenset(p) for p in always}
     unknown = [p for p in always if not set(p) <= set(names)]
